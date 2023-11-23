@@ -1,0 +1,12 @@
+Softwares
+BPP: https://github.com/bpp/bpp/releases
+iBPP: https://github.com/cecileane/iBPP/blob/master/man/winexe.md
+BEAST: https://www.beast2.org/
+Tracer: https://github.com/beast-dev/tracer/releases
+Figtree: https://github.com/rambaut/figtree/releases 
+
+BEAST packages needed (install via BEAUti->File->Manage Packages, select the package and click on "Install/Upgrade")
+starbeast3 v1.1.8
+speedemon v1.1.0
+BEASTLabs v2.0.2
+ORC v1.1.2
