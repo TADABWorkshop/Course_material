@@ -1,0 +1,491 @@
+---
+title: "Diabetes"
+author: "Manuel Tiburtini"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  word_document: default
+---
+
+## **About Dataset**
+
+### **Context**
+
+This dataset is originally from the National Institute of Diabetes and Digestive and Kidney Diseases. The objective is to predict based on diagnostic measurements whether a patient has diabetes.
+
+### **Content**
+
+Several constraints were placed on the selection of these instances from a larger database. In particular, all patients here are females at least 21 years old of Pima Indian heritage.
+
+-   **Pregnancies**: Number of times pregnant 
+
+-   **Glucose**: Plasma glucose concentration a 2 hours in an oral glucose tolerance test 
+
+-   **BloodPressure**: Diastolic blood pressure (mm Hg) 
+
+-   **SkinThickness**: Triceps skin fold thickness (mm) 
+
+-   **Insulin**: 2-Hour serum insulin (mu U/ml) 
+
+-   **BMI**: Body mass index (weight in kg/(height in m)\^2) 
+
+-   **DiabetesPedigreeFunction**: Diabetes pedigree function that calculates diabetes likelihood depending on the subject's age and his/her diabetic family history.
+
+-   **Age**: Age (years) 
+
+-   **Outcome**: Class variable (0 or 1), where 0 is no diabetes and 1 is diabetes
+
+#### **Sources:**
+
+(a) Original owners: National Institute of Diabetes and Digestive and\
+    Kidney Diseases\
+(b) Donor of database: Vincent Sigillito (vgs\@aplcen.apl.jhu.edu)\
+    Research Center, RMI Group Leader\
+    Applied Physics Laboratory\
+    The Johns Hopkins University\
+    Johns Hopkins Road\
+    Laurel, MD 20707\
+
+<!-- -->
+
+(301) 953-6231\
+
+<!-- -->
+
+(c) Date received: 9 May 1990
+
+## Let's get started
+
+```{r Loading packages}
+start <- Sys.time()
+library(conflicted) #resolving conflicting functions
+library(tidyverse) #for tidy data manipulation
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+
+```
+
+### Importing data
+
+```{r importing the data}
+
+Diabetes <- read.csv("~/Desktop/Material TADAB Workshop/Datasets/Diabetes/diabetes.csv")
+
+
+```
+
+### Data inspection
+
+```{r converting the outcome to a factor with 2 levels}
+
+Diabetes <- Diabetes %>% 
+  mutate(diabetes = ifelse(Outcome == 1, "YES", "NO"), .keep="unused") %>% 
+  mutate(diabetes = as.factor(diabetes))
+
+glimpse(Diabetes)
+```
+
+```{r checking type of data}
+library(visdat)
+
+vis_dat(Diabetes)
+
+#type of data
+```
+
+```{r checking missing data}
+
+vis_miss(Diabetes)
+
+#the data is all observed
+```
+
+### Data visualization
+
+```{r Visualizing the data}
+library(GGally) # paired plots 
+library(ggthemes) #fancy themes
+
+#visualizing paired data
+ggpairs(Diabetes, columns = 1:9, ggplot2::aes(colour=diabetes, alpha=0.4), 
+        lower=list(combo=wrap("facethist", binwidth=10)), progress = FALSE)+
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+
+# in the data are present zeros
+
+```
+
+```{r checking the distribution of zeros}
+
+Diabetes %>% 
+  summarize_all(~ sum(. == 0)) %>% 
+  pivot_longer(everything(), names_to = "feature", values_to = "zeros") %>% 
+  arrange(desc(zeros)) %>% 
+  filter(zeros>0) %>% 
+  mutate(perc_zeros=zeros/nrow(Diabetes)) %>%
+  ggplot(aes(x=reorder(feature, desc(perc_zeros)), y=perc_zeros, fill=feature))+
+  geom_bar(stat="identity", color="black")+
+  xlab("Features")+
+  ylab("zeros")+
+  scale_y_continuous(labels = function(x) paste0(x*100, "%"))+
+  theme_minimal()
+
+```
+
+Zeros are common, different choices can be made here, for simplicity, we keep them as zeros.
+
+### Data splitting
+
+```{r splitting data}
+#load the metapackage
+library(tidymodels)
+
+require(rsample)
+#data split
+
+diabetes_split <- initial_split(Diabetes, strata=diabetes)
+
+#check
+diabetes_split
+
+#split
+diabetes_train <- training(diabetes_split)
+diabetes_test <- testing(diabetes_split)
+
+```
+
+### Data visualization: how much are variables correlated?
+
+```{r visualizing correlations}
+library(corrplot)
+require(grDevices)
+
+corr_cols <- colorRampPalette(c("#91CBD765", "#CA225E"))
+
+#correlation plot
+diabetes_train %>%
+    select(-diabetes) %>%
+    cor() %>%
+    corrplot(col = corr_cols(200), tl.col = "black", method =
+"ellipse")
+
+#correlation mean 
+diabetes_train %>%
+    select(-diabetes) %>%
+    cor() %>%
+    data.frame() %>% 
+    summarise(across(where(is.numeric), .fns = 
+                     list(mean = mean,
+                          stdev = sd))) %>% 
+    pivot_longer(everything(), names_sep='_', names_to=c('variable', '.value'))
+
+```
+
+### **Tuning K, the hyper-parameters used in a knn model**
+
+Here we can have up to 3 hyper parameters that we can tune:\
+
+**Neighbors**
+
+:   A single integer for the number of neighbors to consider (often called `k`). For kknn, a default value of 5 is used if `neighbors` is not specified.
+
+**weight_func**
+
+:   A *single* character for the type of kernel function used to weight distances between samples. Valid choices are: `"rectangular"`, `"triangular"`, `"epanechnikov"`, `"biweight"`, `"triweight"`, `"cos"`, `"inv"`, `"gaussian"`, `"rank"`, or `"optimal"`.
+
+**dist_power**
+
+:   A single number for the parameter used in calculating Minkowski distance.
+
+    -   Manhattan distance with dist_power = 1
+
+    -   Euclidean distance with dist_power = 2
+
+        Since both are special cases of the Minkowski distance
+
+We are going to tune only k leaving the default to dist_power and weight_func
+
+```{r Set the engine and choose the tuning hyperpharameters!}
+require(parsnip)
+
+kknn_spec <-
+  nearest_neighbor(neighbors = tune(), 
+                   dist_power = 2, 
+                   weight_func = "optimal") %>%
+  set_engine('kknn') %>%
+  set_mode('classification')
+
+#we will use the default setting for the type of distance and the weight_function of the kernel, but they can be tuned too!
+
+#check the engine glm
+kknn_spec
+
+#Notice that no computation is carried out and on neighbors tune() is now present. It indicates that it need to be tuned later on!
+
+#check the call traslating the tidymodel 
+kknn_spec %>% translate()
+```
+
+### Recipes : preprocessing data
+
+**When setting the recipe...**\
+\
+recipe(diabetes \~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, data = diabetes_train)\
+\
+is the same as writing\
+\
+(diabetes \~ ., data = diabetes_train)
+
+```{r Set up the receipe}
+
+diabetes_recipe <- 
+  recipe(diabetes ~  ., data = diabetes_train) %>% # Specify the model
+  step_BoxCox(all_numeric_predictors()) %>% # we try boxcox trasf. to make some distribution more symmetric 
+  step_scale(all_numeric_predictors()) %>% #  feature scaling & centering is required in knn
+  step_center(all_numeric_predictors()) %>% 
+  step_zv(all_numeric_predictors())
+  #step_dummy() #there are no nominal variables
+
+
+#drop zero variance features (not our case)
+#check the step that will be done by the model 
+
+#check the recipe
+diabetes_recipe 
+```
+
+Fitting the model is a tidy part of the whole process. Preprocessing is crucial when train a ML model. Confused what to do?
+
+Check what to do here! : <https://www.tmwr.org/pre-proc-table.html>
+
+List of abbreviation
+
+-   **dummy**: Do qualitative predictors require a numeric encoding (e.g., via dummy variables or other methods)?
+
+-   **zv**: Should columns with a single unique value be removed?
+
+-   **impute**: If some predictors are missing, should they be estimated via imputation?
+
+-   **decorrelate**: If there are correlated predictors, should this correlation be mitigated? This might mean filtering out predictors, using principal component analysis, or a model-based technique (e.g., regularization).
+
+-   **normalize**: Should predictors be centered and scaled?
+
+-   **transform**: Is it helpful to transform predictors to be more symmetric?
+
+### k-fold Cross Validation for hyperparameter tuning
+
+Cross-validation is essential for fine-tuning the k parameter in KNN classification. This parameter, determining the number of neighbors in predictions, significantly influences model performance. Here's why cross-validation is crucial:
+
+Cross-validation helps find an optimal k value, preventing overfitting or underfitting by assessing performance on diverse data subsets. It ensures the chosen kk generalizes well and reduces bias by evaluating model performance on multiple data splits. Cross-validation is particularly useful for systematically exploring kk values, enhancing the model's ability to make accurate predictions on new, unseen data. In summary, it improves the robustness and generalization of KNN models by assessing performance across various data subsets.
+
+```{r set cross validation}
+
+#set seed for reproducibile results
+set.seed(136)
+cv_folds <-
+ vfold_cv(diabetes_train, 
+          v = 10,  repeats = 1, strata=diabetes) 
+
+#Strata  ensures that, despite the imbalance we noticed in our class variable, our training and test data sets will keep roughly the same proportions of poorly and well-segmented cells as in the original data
+#check folds
+cv_folds
+
+```
+
+### Workflow
+
+Here we combine the model with the preprocessing in the workflow object.
+
+```{r Set up the workflow }
+
+#prepare the workflow
+diabetes_workflow <-
+  workflow() %>%
+  add_model(kknn_spec) %>%
+  add_recipe(diabetes_recipe)
+
+
+
+#check the workflow
+diabetes_workflow
+```
+
+### Tuning the grid
+
+We are going to explore how bal_accuracy change when we change the values of k using the base r expand.grid function.
+
+```{r set resample for tuning hyperparameters}
+## Set to the number of cores you want to make available for parallel computing (if required)
+doParallel::registerDoParallel(cores = 12)
+
+
+#we set the tune grid for knn model neighbors from 1 to 50
+knn_grid <- expand.grid(`neighbors` = seq(1, 100, by = 1))
+
+knn_tune_grid <- tune_grid(
+  diabetes_workflow, # we can pass as arguments both workflow or the mod_spec
+  resamples = cv_folds,
+  control = control_resamples(save_pred = TRUE), #the output tibble contains a list column called .predictions that has the out-of-sample predictions for each parameter combination in the grid and each fold (which can be very large).
+  metrics = metric_set( roc_auc, accuracy, bal_accuracy, kap),
+  grid = knn_grid
+)
+
+```
+
+### Tuning results
+
+```{r Results}
+
+knn_tune_grid %>% 
+  collect_metrics(summarize = TRUE)
+
+knn_tune_grid %>% 
+show_best(metric = "bal_accuracy")
+
+knn_tune_grid %>% 
+autoplot(metric = "bal_accuracy")+
+  theme_clean()
+
+```
+
+How is the Bias-Variance trade off related to the number of nearest neighbors?
+
+-   When 'K' is small then it causes ⬇️ Low Bias, ⬆️ High variance i.e. overfitting of the model.
+
+-   When 'K' is very large then it leads to ⬆️ High Bias, ⬇️ Low variance i.e. underfitting of the model.
+
+![](images/training_data_and_test_99_1-2.png)
+
+### Choosing the tuned hyperparameter 
+
+```{r Selecting the best hyperparameter from the analysis/assesment set}
+
+
+best_k<- select_best(knn_tune_grid, metric = "bal_accuracy")
+
+
+```
+
+```{r finalizing the workflow with tuned k}
+#using the finalize worflow, we can update objects with the best k value
+final_knn_wflow <- 
+  diabetes_workflow %>% 
+  finalize_workflow(best_k)
+
+```
+
+### Extract predictions from the Training set
+
+```{r Extract Predictions from the Train Data}
+
+diabetes_fit_train <- final_knn_wflow %>% 
+    fit(data = diabetes_train) 
+
+
+# extract predictions for assesisng train error
+
+diabetes_train_pred <-  predict(diabetes_fit_train, 
+          new_data = diabetes_train %>% select(-diabetes), type = "prob") %>%
+  bind_cols(
+    truth = factor(diabetes_train$diabetes),
+    .,
+    predict(diabetes_fit_train, 
+            new_data = diabetes_train %>% select(-diabetes), type = "class"))
+
+
+```
+
+#### Metrics of the training set
+
+```{r Metrics on Train Data}
+
+require(yardstick)
+#confusion matrix
+diabetes_train_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+diabetes_train_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+#roc_auc
+diabetes_train_pred %>% roc_auc(truth =truth, .pred_NO)
+```
+
+### Fit on the test set
+
+```{r Predict on Test Data}
+#fit the tuned model on the training set.
+#Here, we use last_fit function to train the tuned k from the training onto the test set directily
+diabetes_fit_test <- 
+  final_knn_wflow %>%
+  last_fit(diabetes_split) 
+
+
+#collecting predictions
+diabetes_test_pred <- diabetes_fit_test %>%  collect_predictions() %>% rename(truth=diabetes)
+
+
+```
+
+#### Metrics of the test set
+
+```{r Metrics on Test Data}
+require(yardstick)
+#confusion matrix
+diabetes_test_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+diabetes_test_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+#roc_auc
+diabetes_test_pred %>% roc_auc(truth = truth, .pred_NO)
+
+#metric set
+classification_metrics <- metric_set(accuracy, mcc, f_meas,bal_accuracy)
+classification_metrics(diabetes_test_pred, truth = truth, estimate = .pred_class)
+
+```
+
+```{r Comparing the trainin and testing with roc}
+
+require(yardstick)
+train_auc <- 
+  diabetes_train_pred %>% 
+  roc_curve(truth = truth, .pred_NO)  %>% 
+  mutate(Dataset = "Training set")
+
+#Yuden J point for testing dataset
+diabetes_train_pred %>% 
+j_index(truth, .pred_class)
+
+
+testing_auc <- 
+  diabetes_test_pred %>% 
+  roc_curve(truth = truth, .pred_NO) %>% 
+    mutate(Dataset = "Test set")
+
+#Yuden J point for testing dataset
+diabetes_test_pred %>% 
+j_index(truth, .pred_class)
+
+```
+
+### ROC analysis
+
+```{r Plotting the ROC curves}
+
+bind_rows(train_auc, testing_auc) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, col = Dataset)) + 
+  geom_path(lwd = 1.5, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  scale_color_viridis_d(option = "plasma", end = .6)+
+  theme_clean()
+
+Sys.time() - start 
+##END  43.29 secs
+```
+
+## Conclusion
+
+Here we have shown how to tune a single hyperparameter k in a knn model for classification using tune grid and cross validation.
