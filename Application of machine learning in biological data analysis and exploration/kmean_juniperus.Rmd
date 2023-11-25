@@ -1,0 +1,437 @@
+---
+title: "Juniper clustering using kmeans"
+author: "Manuel Tiburtini"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Kmean clustering on Juniperus morphometric data
+
+K-means clustering is a popular unsupervised machine learning algorithm used for partitioning a dataset into K distinct, non-overlapping subsets (or clusters). The goal of the algorithm is to group similar data points together and assign them to clusters, where each cluster is represented by its centroid. This data derive from the paper "*Taxonomy of prickly juniper (Juniperus oxycedrus group): A phytochemical - morphometric combined approach at the contact zone of two cryptospecies"* published by Roma-Marzio et al. 2017. They collected a set of morphometric features from Junipers in the mediterranean. Can k-mean find the 3 morphospecies?
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages required}
+start <- Sys.time()
+install.packages("tidyclust")
+library(tidyverse)
+library(tidymodels)
+library(tidyclust)
+library(conflicted)
+conflict_prefer("silhouette", "tidyclust")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+
+```
+
+## Data import
+
+```{r data import and tidy}
+
+Juniperus <- read.csv("~/Desktop/Material TADAB Workshop/Datasets/Juniperus/Juniperus_morphometry.csv", stringsAsFactors=TRUE)
+
+#check the numer of individuals x species
+Juniperus %>% 
+  group_by(SP) %>% 
+  count()
+
+#rename species to shorten the name
+juniperus<- Juniperus %>% mutate(COD_SP=case_when(
+  SP == "deltoides"~"DEL",
+  SP == "macrocarpa"~"MACRO",
+  SP == "oxycedrus"~"OXY", 
+  TRUE ~ SP
+  ),.keep=c("unused")) %>% 
+  relocate(COD_SP, .after=ID) 
+
+```
+
+## Data description
+
+![Figure 1 - Description of the characters](images/Screenshot%202023-11-19%20alle%2022.16.33.png)
+
+```{r, results='asis'}
+# Your table data
+table<- data.frame(
+  N = 1:22,
+  ID = c("L", "W", "Wb", "W10", "W25", "W50", "W80", "W90", "dW", "Mu", 
+         "LBs", "P", "A", "BS", "Hs", "H", "D", "T", "S", "Sl", "Sw", "St"),
+  Character = c(
+    "Leaf length (mm)", "Leaf maximum width (mm)", "Leaf basal width (mm)",
+    "Width of leaf on 10% of leaf's length from base up (mm)",
+    "Width of leaf on 25% of leaf's length from base up (mm)",
+    "Width of leaf on 50% of leaf's length from base up (mm)",
+    "Width of leaf on 80% of leaf's length from base up (mm)",
+    "Width of leaf on 90% of leaf's length from base up (mm)",
+    "Distance from the leaf's base to the point of maximum width (mm)",
+    "Mucro length (mm)", "Stomatal band maximal width (mm)",
+    "Leaf perimeter (mm)", "Leaf area (mm2)",
+    "Maximum height of stomatal band concavity (mm)",
+    "Leaf thickness (mm)", "Seed cone height (mm)",
+    "Seed cone diameter (mm)", "Presence or absence of seed cone scale tips",
+    "Number of seeds for seed cone", "Seed length (mm)",
+    "Seed width (mm)", "Seed thickness (mm)"
+  )
+)
+
+
+# Print the table using kable
+knitr::kable(table, format = "simple", row.names = FALSE)
+```
+
+## Data visualization and exploration
+
+We are going to use *ggpairs* to visualize the data
+
+```{r data visualization and exploration message=FALSE}
+library(GGally)
+
+#function to add linear regression to ggpairs objects
+lowerFn <- function(data, mapping, emap=NULL, method = "lm", ...) {
+  # mapping <- c(mapping, emap)
+  # class(mapping) = "uneval" # need this to combine the two aes
+  # Can use this instead
+  mapping <- ggplot2:::new_aes(c(mapping, emap))
+  p <- ggplot(data = data, mapping = mapping) +
+    geom_point() +
+    geom_smooth(method = method, ...) +
+    theme_classic() # to get the white background and prominent axis
+  p
+}
+
+juniperus %>% 
+ggpairs(columns = 2:11, ggplot2::aes(colour=COD_SP, alpha=0.4), progress = FALSE, lower = list(continuous = wrap(lowerFn, 
+                                 method = "lm", fullrange=TRUE, se=FALSE,
+                                 emap=aes(color=COD_SP)))) +
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+
+
+juniperus %>% 
+ggpairs(columns = 11:17, ggplot2::aes(colour=COD_SP, alpha=0.4), progress = FALSE, lower = list(continuous = wrap(lowerFn, 
+                                 method = "lm", fullrange=TRUE, se=FALSE,
+                                 emap=aes(color=COD_SP)))) +
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+
+
+prova <- juniperus %>% 
+ggpairs(columns = 17:23, ggplot2::aes(colour=COD_SP, alpha=0.4), progress = FALSE, lower = list(continuous = wrap(lowerFn, 
+                                 method = "lm", fullrange=TRUE, se=FALSE,
+                                 emap=aes(color=COD_SP)))) +
+  theme_minimal()+
+  theme(panel.grid=element_blank()) 
+
+
+```
+
+## Are zeros present?
+
+```{r checking the distribution of zeros}
+
+juniperus %>% 
+  summarize_all(~ sum(. == 0)) %>% 
+  pivot_longer(everything(), names_to = "feature", values_to = "zeros") %>% 
+  arrange(desc(zeros)) %>% 
+  filter(zeros>0) %>% 
+  mutate(perc_zeros=zeros/nrow(juniperus)) %>%
+  ggplot(aes(x=reorder(feature, desc(perc_zeros)), y=perc_zeros, fill=feature))+
+  geom_bar(stat="identity", color="black")+
+  xlab("Features")+
+  ylab("zeros")+
+  scale_y_continuous(labels = function(x) paste0(x*100, "%"))+
+  theme_minimal()
+
+```
+
+## Missing and data types
+
+```{r checking missing data}
+library(visdat)
+
+vis_miss(juniperus)
+
+```
+
+```{r checking types of data}
+library(visdat)
+
+vis_dat(juniperus)
+
+```
+
+## Clustering using tidyclust!
+
+Up to now, tidymodels dealt only with supervised and DR techniques. In 2023, tidyclust was released and adopt the same philosophy of coding and modelling of tidymodels, making clustering much easier.
+
+### Let's set the k-mean engine
+
+```{r setting the engine}
+
+kmeans_spec <- k_means(num_clusters = tune()) %>%
+  set_engine("stats")
+
+kmeans_spec
+```
+
+### **Recipes**
+
+We are going to explore different ways to preprocess our data. Since many predictors are highly correlated, PCA can solve 2 problems, dimentionality and collinearity. Let's check how win
+
+```{r set up the recipes}
+
+juniperus_rec <- recipe(~.,
+  data = juniperus) %>% 
+  update_role(COD_SP, new_role="class") %>% 
+  update_role(ID, new_role = "id") %>% 
+  step_normalize(all_numeric_predictors())
+
+juniperus_rec_trasform <- juniperus_rec %>% 
+  step_BoxCox(all_numeric_predictors())
+
+juniperus_rec_pca <- juniperus_rec %>% 
+  step_pca(all_numeric_predictors(), threshold = 0.90)
+
+```
+
+### K-fold Cross validation to assess the fit
+
+```{r set the resampling method}
+juniperus_cv <- vfold_cv(juniperus, v = 5)
+```
+
+```{r setting the tuning grid}
+
+clust_num_grid <- grid_regular(num_clusters(),
+  levels = 10
+)
+
+juniperus_workflow_set<- workflow_set(
+  preproc = list(juniperus_rec,juniperus_rec_trasform, juniperus_rec_pca),
+  models = list(kmeans_spec),  cross = TRUE
+)
+
+```
+
+### Let's tune!
+
+```{r setting up the tuning for the number of clusters}
+
+grid_ctrl <-
+   control_grid(
+      save_pred = TRUE,
+      parallel_over = "everything",
+      save_workflow = TRUE, allow_par=TRUE
+   )
+
+doParallel::registerDoParallel(cores = 12)
+
+fit_workflows_clust <-
+  workflow_map(juniperus_workflow_set,
+    seed = 22, ## replicability 
+    fn = "tune_cluster",
+    control = grid_ctrl,
+    resamples = juniperus_cv,
+    metrics = cluster_metric_set(sse_within_total, sse_total, sse_ratio),
+    verbose=TRUE,
+    grid=30 #10 different parameter combination
+  )  
+
+
+```
+
+### Inspect the results using clustering metrics
+
+```{r}
+
+fit_workflows_clust %>% 
+  rank_results(rank_metric = "sse_ratio", select_best = TRUE)
+
+fit_workflows_clust %>% 
+  autoplot()+ theme_clean()
+
+
+best_clust_id<- fit_workflows_clust %>% 
+  rank_results(
+    rank_metric = "sse_ratio",
+    select_best = TRUE
+  ) %>% 
+  slice(1) %>% 
+  pull(wflow_id)
+
+
+best_clust_wf <- extract_workflow(fit_workflows_clust, id = best_clust_id)
+```
+
+### Finalize the workflow with the best model
+
+```{r finalize the workflow}
+
+best_clust_mod <- fit_workflows_clust%>% 
+  pull_workflow_set_result(id=best_clust_id)
+
+best_params <-  best_clust_mod %>% 
+  collect_metrics(summarize = T) %>% 
+  slice(1) %>% 
+  select(num_clusters)
+
+
+final_mod_kmean<- finalize_workflow_tidyclust(best_clust_wf, parameters = 
+                                               data.frame(num_clusters = 4))
+```
+
+### Extract clustering assignment and centroid from the best model
+
+```{r fitting the final models and extract assignment and centroid}
+set.seed(123)
+
+final_kmean_fit<- final_mod_kmean %>% 
+  fit(juniperus)
+
+clusters_assigment <- final_kmean_fit %>% 
+  extract_cluster_assignment() %>% 
+  data.frame() %>% 
+  c() %>% 
+  unlist()
+
+clusters_centroid <- final_kmean_fit %>% 
+  extract_centroids() %>% 
+  select(PC1, PC2,PC3)
+
+```
+
+### Visualizing the clustering results
+
+#### Elbow: How to select the numer of clusters?
+
+```{r Elbow Plot}
+library(ggthemes)
+
+best_clust_mod %>% 
+  collect_metrics(summarize = T)%>% 
+  filter(.metric == "sse_ratio") %>%
+  ggplot(aes(x = num_clusters, y = mean)) +
+  geom_point() +
+  geom_line() +
+  theme_clean() +
+  ylab("mean WSS/TSS ratio, over 5 folds (i.e. diameter)") +
+  xlab("Number of clusters") +
+  scale_x_continuous(breaks = 1:10)
+```
+
+#### Silhouette plot
+
+```{r Silhouette plot}
+
+#custom function to plot silhouette results for tidymodels
+plot_silhouette <- function(df, label = FALSE, print.summary = TRUE, ...) {
+  # Order the dataframe
+  df <- df[order(df$cluster, -df$sil_width), ]
+  # Create a factor for row names if available
+  if (!is.null(rownames(df))) {
+    df$name <- factor(rownames(df), levels = rownames(df))
+  } else {
+    df$name <- as.factor(1:nrow(df))
+  }
+  # Mapping for ggplot
+  mapping <- aes_string(x = "name", y = "sil_width", color = "cluster", fill = "cluster")
+  # Create the ggplot object
+  p <- ggplot(df, mapping) +
+    geom_bar(stat = "identity") +
+    labs(y = "Silhouette width Si", x = "",
+         title = paste0("Clusters silhouette plot ", "\n Average silhouette width: ",
+                        round(mean(df$sil_width), 2))) +
+    theme(panel.background = element_blank())+
+    ggplot2::ylim(c(NA, 1)) +
+    geom_hline(yintercept = mean(df$sil_width), linetype = "dashed", color = "red")
+  # Customize ggplot appearance
+  p <- ggpubr::ggpar(p, ...)
+  # Customize x-axis text and ticks based on the label parameter
+  if (!label) {
+    p <- p + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  } else if (label) {
+    p <- p + theme(axis.text.x = element_text(angle = 45))
+  }
+  # Calculate cluster summary
+  ave <- tapply(df$sil_width, df$cluster, mean)
+  n <- tapply(df$cluster, df$cluster, length)
+  sil.sum <- data.frame(cluster = names(ave), size = n, ave.sil.width = round(ave, 2), stringsAsFactors = TRUE)
+  # Print summary if required
+  if (print.summary) {
+    print(sil.sum)
+  }
+  # Return the ggplot object
+  p
+}
+
+
+distance <- juniperus %>%
+  select(-ID, -COD_SP) %>% 
+  dist(method = "euclidean")
+
+juniper_silhouete<- silhouette(final_kmean_fit, dists = distance) %>% data.frame()
+
+
+plot_silhouette(juniper_silhouete) 
+```
+
+### **Possible solutions**
+
+At each increase in the number of clusters, the WSS/TSS ratio decreases, with the amount of decrease getting smaller as the number of clusters grows. We might argue that the drop from two clusters to three, or from three to four, is a bit more extreme than the subsequent drops, so we should probably choose three or four clusters.\
+We keep 3-4 cluster, let's see.
+
+Visual inspection can be a good method for checking the result of a clustering.
+
+```{r visualizing the clustering results}
+
+#preparing the receipe for pca
+pca_rec <-recipe(~ ., data = juniperus) %>%
+  step_mutate(clust=clusters_assigment) %>% 
+  update_role(COD_SP, new_role="class") %>% 
+  update_role(ID, new_role = "id") %>% 
+  step_normalize(all_numeric_predictors()) %>%
+  step_pca(all_numeric_predictors(), num_comp = 3)
+
+#plotting the pca
+library(ggConvexHull)
+
+pca_rec %>% 
+  prep() %>% 
+  bake(new_data=NULL) %>% 
+  ggplot(aes(x=PC1, y=PC2, color=clust))+
+  geom_point(size=4, alpha=0.4)+
+  theme_clean() +
+  geom_convexhull(alpha = 0.7, fill = NA,
+                  show.legend = FALSE)+
+    geom_point(data = clusters_centroid, inherit.aes = FALSE,
+             mapping = aes(x = PC1, y = PC2), shape = 4, size = 4) +
+  scale_shape_discrete(guide = "none")
+  
+pca_rec %>% 
+  prep() %>% 
+  bake(new_data=NULL) %>% 
+  ggplot(aes(x=PC1, y=PC2, color=COD_SP))+
+  geom_point(size=4, alpha=0.4)+
+  theme_clean() +
+  geom_convexhull(alpha = 0.7, fill = NA,
+                  show.legend = FALSE)
+
+final_kmean_fit %>% 
+  extract_cluster_assignment() %>% 
+  rename(estimate=.cluster) %>% 
+  data.frame() %>% 
+  bind_cols(truth=juniperus$COD_SP %>% factor()) %>% 
+  table()
+
+
+library(beepr)
+beep()
+Sys.time() - start 
+##END running time 55.88 secs
+```
+
+## Concluding remarks
+
+We shown how to conduct a kmean clustering with tidyclust and compared the clustering results with the labels we have.
