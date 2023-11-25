@@ -1,0 +1,556 @@
+---
+title: "Diabetes_svm"
+author: "Manuel Tiburtini - Sina Gholami"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## **About Dataset**
+
+### **Context**
+
+This dataset is originally from the National Institute of Diabetes and Digestive and Kidney Diseases. The objective is to predict based on diagnostic measurements whether a patient has diabetes.
+
+### **Content**
+
+Several constraints were placed on the selection of these instances from a larger database. In particular, all patients here are females at least 21 years old of Pima Indian heritage.
+
+-   **Pregnancies**: Number of times pregnant 
+
+-   **Glucose**: Plasma glucose concentration a 2 hours in an oral glucose tolerance test 
+
+-   **BloodPressure**: Diastolic blood pressure (mm Hg) 
+
+-   **SkinThickness**: Triceps skin fold thickness (mm) 
+
+-   **Insulin**: 2-Hour serum insulin (mu U/ml) 
+
+-   **BMI**: Body mass index (weight in kg/(height in m)\^2) 
+
+-   **DiabetesPedigreeFunction**: Diabetes pedigree function that calculates diabetes likelihood depending on the subject's age and his/her diabetic family history.
+
+-   **Age**: Age (years) 
+
+-   **Outcome**: Class variable (0 or 1), where 0 is no diabetes and 1 is diabetes
+
+#### **Sources**
+
+(a) Original owners: National Institute of Diabetes and Digestive and\
+    Kidney Diseases\
+(b) Donor of database: Vincent Sigillito (vgs\@aplcen.apl.jhu.edu)\
+    Research Center, RMI Group Leader\
+    Applied Physics Laboratory\
+    The Johns Hopkins University\
+    Johns Hopkins Road\
+    Laurel, MD 20707\
+
+<!-- -->
+
+(301) 953-6231\
+
+<!-- -->
+
+(c) Date received: 9 May 1990
+
+## Let's get started
+
+```{r Loading packages}
+library(conflicted) #resolving conflicting functions
+library(tidyverse) #for tidy data manipulation
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+
+```
+
+### Importing data
+
+```{r importing the data}
+
+Diabetes <- read.csv("~/Desktop/Material TADAB Workshop/Datasets/Diabetes/diabetes.csv")
+
+glimpse(Diabetes)
+
+```
+
+```{r converting the outcome to a factor with 2 levels}
+
+Diabetes <- Diabetes %>% 
+  mutate(diabetes = ifelse(Outcome == 1, "YES", "NO"), .keep="unused") %>% 
+  mutate(diabetes = as.factor(diabetes))
+
+```
+
+### Data inspection
+
+```{r checking type of data}
+library(visdat)
+
+vis_dat(Diabetes)
+
+#type of data
+```
+
+```{r checking missing data}
+
+vis_miss(Diabetes)
+
+#the data is all observed
+```
+
+### Data visualization
+
+```{r Visualizing the data}
+library(GGally) # paired plots 
+library(ggthemes) #fancy themes
+
+#visualizing paired data
+ggpairs(Diabetes, columns = 1:9, ggplot2::aes(colour=diabetes, alpha=0.4), 
+        lower=list(combo=wrap("facethist", binwidth=10)), progress = FALSE)+
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+
+# in the data are present zeros
+
+```
+
+```{r checking the distribution of zeros}
+
+Diabetes %>% 
+  summarize_all(~ sum(. == 0)) %>% 
+  pivot_longer(everything(), names_to = "feature", values_to = "zeros") %>% 
+  arrange(desc(zeros)) %>% 
+  filter(zeros>0) %>% 
+  mutate(perc_zeros=zeros/nrow(Diabetes)) %>%
+  ggplot(aes(x=reorder(feature, desc(perc_zeros)), y=perc_zeros, fill=feature))+
+  geom_bar(stat="identity", color="black")+
+  xlab("Features")+
+  ylab("zeros")+
+  scale_y_continuous(labels = function(x) paste0(x*100, "%"))+
+  theme_minimal()
+
+
+```
+
+### Data splitting
+
+```{r splitting data}
+#load the metapackage
+library(tidymodels)
+
+require(rsample)
+#data split
+
+diabetes_split <- initial_split(Diabetes)
+
+#check
+diabetes_split
+
+#split
+diabetes_train <- training(diabetes_split)
+diabetes_test <- testing(diabetes_split)
+
+```
+
+### Data visualization: how much are variables correlated?
+
+```{r visualizing correlations}
+library(corrplot)
+require(grDevices)
+
+corr_cols <- colorRampPalette(c("#91CBD765", "#CA225E"))
+
+#correlation plot
+diabetes_train %>%
+    select(-diabetes) %>%
+    cor() %>%
+    corrplot(col = corr_cols(200), tl.col = "black", method =
+"ellipse")
+
+#correlation mean 
+diabetes_train %>%
+    select(-diabetes) %>%
+    cor() %>%
+    data.frame() %>% 
+    summarise(across(where(is.numeric), .fns = 
+                     list(mean = mean,
+                          stdev = sd))) %>% 
+    pivot_longer(everything(), names_sep='_', names_to=c('variable', '.value'))
+
+
+diabetes_train %>% count(diabetes) %>% mutate(prop=n/sum(n))
+
+```
+
+### Setting the Support Vector Machines engines
+
+```{r Set the engines and choose the tuning hyperpharameters!}
+
+require(kernlab)
+
+svm_linear_spec <-
+  svm_linear(cost = tune(), 
+             margin = tune()) %>%
+  set_engine('kernlab') %>%
+  set_mode('classification')
+
+svm_poly_spec <-
+  svm_poly(cost = tune(), 
+           degree = tune(), 
+           scale_factor = tune(), 
+           margin = tune()) %>%
+  set_engine('kernlab') %>%
+  set_mode('classification')
+
+svm_rbf_spec <-
+  svm_rbf(cost = tune(), 
+          rbf_sigma = tune(), 
+          margin = tune()) %>%
+  set_engine('kernlab') %>%
+  set_mode('classification')
+
+
+
+#check the engines & tuning hyperparameters (check default extract_parameter_dials("tuning hyp))
+svm_linear_spec %>% extract_parameter_set_dials()
+svm_poly_spec %>% extract_parameter_set_dials()
+svm_rbf_spec %>% extract_parameter_set_dials()
+
+
+```
+
+### **Hyper-parameters used in SVM models**
+
+1.  **Linear SVM (`svm_linear_spec`):**
+
+    -   **`cost`**: Adjust how hard or soft your large margin classification should be.\
+        A higher **`cost`** emphasizes classifying training data correctly, possibly leading to overfitting.
+
+    -   **`margin`**: The margin parameter, which influences the width of the margin between the decision boundary and the support vectors.
+
+2.  **Polynomial SVM (`svm_poly_spec`):**
+
+    -   **`cost`**: Same to the linear SVM.
+
+    -   **`degree`**: The degree of the polynomial kernel function. It defines the degree of the polynomial used in the kernel trick.
+
+    -   **`scale_factor`**: A scaling factor applied to the input data before computing the dot product. It can affect the influence of individual features on the decision boundary.
+
+    -   **`margin`**: Similar to linear SVM, it controls the width of the margin.
+
+3.  **RBF (Radial Basis Function) SVM (`svm_rbf_spec`):**
+
+    -   **`cost`**: Same as in linear and polynomial SVMs
+
+    -   **`rbf_sigma`**: The width of the RBF kernel. It determines the influence of individual training points on the decision boundary. A smaller **`rbf_sigma`** makes the boundary more sensitive to individual data points.
+
+    -   **`margin`**: Similar to linear SVM, it controls the width of the margin.\
+
+### Recipes : preprocessing data
+
+```{r Set up the receipe}
+require(themis) #SMOTE
+
+diabetes_recipe <- 
+  recipe(diabetes ~  ., data = diabetes_train) %>% 
+  step_smote(diabetes) %>% # Specify the model
+  step_BoxCox(all_numeric_predictors()) %>% # we try boxcox trasf. to make some distribution more symmetric 
+  step_normalize(all_numeric_predictors()) %>% #  feature scaling & centering is required in SVM
+  step_zv(all_numeric_predictors())#drop zero variance features (not our case)
+#check the step that will be done by the model 
+
+#check the recipe
+diabetes_recipe
+
+#bake the recipe to check how the preprocessing affect the data
+diabetes_recipe %>% 
+  prep() %>% 
+  bake(new_data=NULL) %>% 
+  ggpairs(columns = 1:9, ggplot2::aes(colour=diabetes, alpha=0.4), 
+        lower=list(combo=wrap("facethist", binwidth=10)), progress = FALSE)+
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+```
+
+#### List of abbreviation in the preprocessing 
+
+-   **dummy**: Do qualitative predictors require a numeric encoding (e.g., via dummy variables or other methods)?
+
+-   **zv**: Should columns with a single unique value be removed?
+
+-   **impute**: If some predictors are missing, should they be estimated via imputation?
+
+-   **decorrelate**: If there are correlated predictors, should this correlation be mitigated? This might mean filtering out predictors, using principal component analysis, or a model-based technique (e.g., regularization).
+
+-   **normalize**: Should predictors be centered and scaled?
+
+-   **transform**: Is it helpful to transform predictors to be more symmetric?
+
+Find more : [Model reccomended preprocesssing](https://www.tmwr.org/pre-proc-table.html)
+
+### Set the k-fold cross validation
+
+```{r set cross validation}
+
+#set seed for reproducibile results
+set.seed(136)
+cv_folds <-
+ vfold_cv(diabetes_train, 
+          v = 10,  repeats = 1, strata=diabetes) 
+
+#Strata  ensures that, despite the imbalance we noticed in our class variable, our training and test data sets will keep roughly the same proportions of poorly and well-segmented cells as in the original data
+#check folds
+cv_folds
+
+```
+
+![](images/Screenshot%202023-08-05%20alle%2018.45.49.png)
+
+Remeber that Bias-Variance trade off holds in k-fold cross validation. K should be decided respect to the size of the training data. Bigger dataset can accommodate higher values of K, usually 10-fold CV ensure an equilibrium between Bias and Variance during cross validation resampling.
+
+### Workflow..... Set
+
+```{r Set up the workflow }
+
+#prepare the workflow
+diabetes_workflow_set <-
+  workflow_set(preproc=list(diabetes_recipe),
+               models=list(svm_linear = svm_linear_spec, 
+                    svm_poly = svm_poly_spec, 
+                    svm_rbf= svm_rbf_spec), cross = FALSE) 
+  
+
+
+#check the workflow
+diabetes_workflow_set
+```
+
+### Build better learner: Hyperparameter tuning
+
+```{r set resample for tuning hyperparameters}
+## Set to the number of cores you want to make available for parallel computing (if required)
+parallel::detectCores() # how many cores has your machine? 
+
+doParallel::registerDoParallel(cores = 12)
+
+
+#lets visualize hyperparameter space 
+svm_grid <- grid_latin_hypercube(svm_margin(), 
+                         rbf_sigma(), 
+                         scale_factor(), 
+                         degree(),
+                         cost(), size = 50)
+
+
+#the hyperparameter space
+library(plotly)
+svm_rbf_spec %>% 
+  extract_parameter_set_dials() %>% 
+grid_latin_hypercube(size = 50) %>% 
+  plot_ly(., x = ~cost, y = ~rbf_sigma, z = ~margin) %>% 
+  add_markers() %>% 
+  layout(scene = list(xaxis = list(title = 'cost'), 
+                                     yaxis = list(title = 'rbf_sigma'), 
+                                     zaxis = list(title = 'margin'))) 
+  
+
+```
+
+```{r Hyperparameter tuning}
+
+#set the crontrol for the tuning grid
+grid_ctrl <-
+   control_grid(
+      save_pred = TRUE,
+      parallel_over = "everything",
+      save_workflow = TRUE, allow_par=TRUE
+   )
+
+start <- Sys.time()
+#Tuning!!
+fit_workflows_set <-
+  workflow_map(diabetes_workflow_set,
+    seed = 22, ## replicability 
+    fn = "tune_grid",
+    control = grid_ctrl,
+    resamples = cv_folds,
+    metrics = metric_set(roc_auc,accuracy, bal_accuracy),
+    verbose=TRUE,
+    grid=50 #grid: the number of candidate hyperparameter combinations to be tried (from a Latin hypercube)
+  )  
+Sys.time() - start
+
+
+
+
+doParallel::stopImplicitCluster() #stop parallel computing
+
+fit_workflows_set %>% 
+  autoplot() + 
+  theme_clean()
+
+
+fit_workflows_set %>% 
+  rank_results(rank_metric = "roc_auc", select_best = TRUE)
+
+
+```
+
+```{r Extract the best workflow}
+
+best_wf_id <- fit_workflows_set %>% 
+  rank_results(
+    rank_metric = "accuracy",
+    select_best = TRUE
+  ) %>% 
+  slice(1) %>% 
+  pull(wflow_id)
+
+
+#Selecting the most perfomant workflow and model
+wf_best <- extract_workflow(fit_workflows_set, id = best_wf_id)
+wf_best
+
+wf_best_tuned <- fit_workflows_set%>% 
+  pull_workflow_set_result(id=best_wf_id)
+
+#check how hyperparameters influence the predictions
+wf_best_tuned %>% autoplot()+
+  theme_clean()
+
+
+
+```
+
+### Visualizing variance
+
+```{r Assessing the variance between folds}
+collect_predictions(wf_best_tuned) %>% 
+  rename("k_Folds"="id") %>% 
+  group_by(k_Folds) %>% 
+  roc_curve(
+    diabetes, .pred_NO,
+    event_level = "first"
+  ) %>% 
+  autoplot()+
+  theme_clean()+
+  theme(panel.grid.major.y = element_blank())
+```
+
+```{r finalizing the workflow extracting the best tuned hyperparameters}
+
+final_svm_wflow<- finalize_workflow(wf_best, 
+                                    select_best(wf_best_tuned, "accuracy"))
+
+```
+
+### Extract predictions from the training set
+
+```{r Extract Predictions from the Train Data}
+
+diabetes_fit_train <- final_svm_wflow %>% 
+  fit(data = diabetes_train)
+
+# extract predictions for assesisng train error
+
+diabetes_train_pred <-  predict(diabetes_fit_train, 
+          new_data = diabetes_train %>% select(-diabetes), type = "prob") %>%
+  bind_cols(
+    truth = factor(diabetes_train$diabetes),
+    .,
+    predict(diabetes_fit_train, 
+            new_data = diabetes_train %>% select(-diabetes), type = "class"))
+
+
+```
+
+```{r Metrics on Train Data}
+
+require(yardstick)
+#confusion matrix
+diabetes_train_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+diabetes_train_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+#roc_auc
+diabetes_train_pred %>% roc_auc(truth =truth, .pred_NO)
+```
+
+### Last fit on test data
+
+```{r Predict on Test Data}
+#fit the tuned model 
+#we use last_fit function to train the tuned k from the training onto the test set 
+diabetes_fit_test <- 
+  final_svm_wflow %>%
+  last_fit(diabetes_split) 
+
+#collecting predictions
+diabetes_test_pred <- 
+  diabetes_fit_test %>% 
+  collect_predictions() %>% 
+  rename(truth=diabetes)
+
+```
+
+```{r Metrics on Test Data}
+require(yardstick)
+#confusion matrix
+diabetes_test_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+diabetes_test_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+#roc_auc
+diabetes_test_pred %>% roc_auc(truth = truth, .pred_NO)
+
+#metric set
+classification_metrics <- metric_set(accuracy, mcc, f_meas,bal_accuracy)
+classification_metrics(diabetes_test_pred, truth = truth, estimate = .pred_class)
+
+```
+
+### ROC analysis and conclusion
+
+```{r Comparing the trainin and testing with roc}
+
+require(yardstick)
+train_auc <- 
+  diabetes_train_pred %>% 
+  roc_curve(truth = truth, .pred_NO, , event_level = "first")  %>% 
+  mutate(Dataset = "Training set")
+
+#Yuden J point for testing dataset
+diabetes_train_pred %>% 
+j_index(truth, .pred_class)
+
+testing_auc <- 
+  diabetes_test_pred %>% 
+  roc_curve(truth = truth, .pred_NO, event_level = "first") %>% 
+    mutate(Dataset = "Test set")
+
+#Yuden J point for testing dataset
+diabetes_test_pred %>% 
+j_index(truth, .pred_class)
+
+```
+
+### Comparing training and test metrics
+
+```{r Plotting the ROC curves}
+
+bind_rows(train_auc, testing_auc) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, col = Dataset)) + 
+  geom_path(lwd = 1.5, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  scale_color_viridis_d(option = "plasma", end = .6)+
+  theme_clean()
+
+##END
+```
+
+need help? <https://simonschoe.github.io/ml-with-tidymodels/?panelset11=collect_predictions%28%29#88>
+
+\
+We can conclude that RBF SVM is doing a good job in the diagnosis of Diabetes even with this difficult data.
