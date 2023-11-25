@@ -1,0 +1,338 @@
+---
+title: "R Notebook"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r Loading packages}
+library(conflicted) #resolving conflicting functions
+library(tidyverse) #for tidy data manipulation
+conflict_prefer("select", "dplyr")
+```
+
+```{r Data explanation}
+
+#Amminoacids coding
+#1-G (Glycine, Gly); 
+#2-P (Proline, Pro); 
+#3-A (Alanine, Ala); 
+#4-V (Valine, Val); 
+#5-L (Leucine, Leu); 
+#6-I (Isoleucine, Ile); 
+#7-M (Methionine, Met); 
+#8-C (Cysteine, Cys); 
+#9-F (Phenylalanine, Phe); 
+#10-Y (Tyrosine, Tyr); 
+#11-W (Tryptophan, Trp); 
+#12-H (Histidine, His); 
+#13-K (Lysine, Lys); 
+#14-R (Arginine, Arg); 
+#15-Q (Glutamine, Gln); 
+#16-N (Asparagine, Asn); 
+#17-E (Glutamic Acid, Glu); 
+#18-D (Aspartic Acid, Asp); 
+#19-S (Serine, Ser); 
+#20-T (Threonine, Thr).
+
+#Details
+#https://academic.oup.com/bioinformatics/article/31/8/1204/212810
+# The protease plays a crucial role in the life cycle of HIV,
+#it cleaves the HIV-1 polyproteins in multiple sites to create 
+#mature protein components of the virions, the infectious HIV particles.
+#The classification task is to tell whether a 
+#given octamer (sequence of eight amino acids) 
+#will be cleaved or not between the fourth and the fifth position.
+
+```
+
+```{r Load the data}
+#load the data 
+HIV <- read.csv("~/Desktop/Material TADAB Workshop/Datasets/HIV/HIV.csv")
+
+#look up
+glimpse(HIV)
+
+```
+
+```{r Converting ammino acids to integers}
+#from BioPhysConnectoR package
+aa2num<-function(seq,offset=0,code=0:19,verbose=FALSE){
+  # ### Begin of the original bio3d function "aa123" as provided in bio3d 1.0-6 under GPL version2 by Grant, Rodrigues, ElSawy, McCammon, Caves, (2006) {Bioinformatics} 22, 2695--2696.
+  aa123<-function(aa){
+    
+    # convert one-letter IUPAC amino-acid code into
+    # three-letter PDB style, for instance "A" into "ALA".
+    
+    aa1 <- c("-","X",
+             "A","C","D","E","F","G",
+             "H","I","K","L","M","N","P","Q",
+             "R","S","T","V","W","Y")
+    aa3 <- c("---","UNK",
+             "ALA", "CYS", "ASP", "GLU", "PHE", "GLY",
+             "HIS", "ILE", "LYS", "LEU", "MET", "ASN", "PRO", "GLN",
+             "ARG", "SER", "THR", "VAL", "TRP", "TYR")
+    
+    convert <- function(x) {
+      if(is.na(x)) return(NA)
+      if (all(x != aa1)) {
+        warning("Unknown one letter code for aminoacid")
+        #      return(NA)
+        return("UNK")
+      }
+      else {
+        return(aa3[which(x == aa1)])
+      }
+    }
+    return(as.vector(unlist(sapply(aa, convert))))
+  }
+  # ### End of bio3d function
+  
+  if(verbose){
+    show.code(code,offset)
+    cat("\noffset:",offset,"\n\n")
+  }
+  if(length(unlist(strsplit(seq[1],split="")))==1){
+    seq<-aa123(seq)
+  }
+  seqcode<-function(seq,i=1,code=0:19){
+    switch(seq,
+           "CYS"={seq=i+code[1]},
+           "MET"={seq=i+code[2]},
+           "PHE"={seq=i+code[3]},
+           "ILE"={seq=i+code[4]},
+           "LEU"={seq=i+code[5]},
+           "VAL"={seq=i+code[6]},
+           "TRP"={seq=i+code[7]},
+           "TYR"={seq=i+code[8]},
+           "ALA"={seq=i+code[9]},
+           "GLY"={seq=i+code[10]},
+           "THR"={seq=i+code[11]},
+           "SER"={seq=i+code[12]},
+           "ASN"={seq=i+code[13]},
+           "GLN"={seq=i+code[14]},
+           "ASP"={seq=i+code[15]},
+           "GLU"={seq=i+code[16]},
+           "HIS"={seq=i+code[17]},
+           "ARG"={seq=i+code[18]},
+           "LYS"={seq=i+code[19]},
+           "PRO"={seq=i+code[20]});
+    return(seq)
+  }
+  ret<-as.numeric(apply(as.array(seq),1,seqcode,offset,code))
+  return(ret)
+}
+
+```
+
+```{r Preparing the data}
+HIV.num <- HIV %>% 
+  mutate(cleaved = ifelse(cleaved == 1, "YES", "NO")) %>%
+  mutate(id = row_number()) %>%
+  separate(AMINO.ACID, 
+           into = c('1', '2', '3', '4', '5', '6', '7', '8', '9'),
+           sep = "") %>% 
+  rename(AA0 = "1",
+         AA1 = "2",
+         AA2 = "3",
+         AA3 = "4",
+         AA4 = "5",
+         AA5 = "6",
+         AA6 = "7",
+         AA7 = "8",
+         AA8 = "9") %>% 
+  select(-AA0,-id) %>% 
+  mutate_at(vars(starts_with("AA")), ~ aa2num(.))
+
+#give a look to the data t
+glimpse(HIV.num)
+```
+
+```{r Visualizing the data}
+library(GGally) # paired plots 
+library(ggthemes) #fancy themes
+
+#visualizing paired data
+ggpairs(HIV.num, columns = 1:9, ggplot2::aes(colour=cleaved, alpha=0.4), 
+        lower=list(combo=wrap("facethist", binwidth=10)))+
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+
+
+#is the frequency of amino acids different between the classes?
+HIV %>% 
+  mutate(cleaved = ifelse(cleaved == 1, "YES", "NO")) %>%
+  mutate(id = row_number()) %>%
+  separate(AMINO.ACID, 
+           into = c('1', '2', '3', '4', '5', '6', '7', '8', '9'),
+           sep = "") %>% 
+  rename(AA0 = "1",
+         AA1 = "2",
+         AA2 = "3",
+         AA3 = "4",
+         AA4 = "5",
+         AA5 = "6",
+         AA6 = "7",
+         AA7 = "8",
+         AA8 = "9") %>% 
+  select(-AA0) %>% 
+  gather(., key = "Column", value = "Value", -id,-cleaved) %>% 
+  ggplot(data = ., aes(x = id, y=Value, fill=cleaved)) + 
+  geom_bar(stat = "identity", position = "fill", width = 1) +
+  theme_clean()
+  
+
+```
+
+```{r splitting data!}
+#load the package
+library(tidymodels)
+
+#data split
+set.seed(191)
+hiv_split <- initial_split(HIV.num, strata = "cleaved")
+
+#check
+hiv_split
+#split
+hiv_train <- training(hiv_split)
+hiv_test <- testing(hiv_split)
+
+
+```
+
+```{r Set the engine!}
+require(parsnip)
+glm_model <- logistic_reg() %>% 
+  set_engine("glm") %>%
+  set_mode("classification") 
+
+#check the engine glm
+glm_model
+
+```
+
+```{r Set up the receipe}
+
+#no need to impute o preprocess any data, steps not required
+hiv_recipe <- 
+ recipe(cleaved ~  AA1 + AA2 + AA3 + AA4 + AA5 + AA6 + AA7 + AA8, # Specify the model
+    data = hiv_train
+  ) 
+
+#check the step that will be done by the model
+hiv_recipe
+
+```
+
+```{r Set up the workflow}
+
+hiv_workflow <-
+  workflow() %>%
+  add_model(glm_model) %>%
+  add_recipe(hiv_recipe)
+
+#check the workflow
+hiv_workflow
+```
+
+```{r Fit and Predict on Training Data}
+
+#fit the model
+hiv_fit_train <- fit(hiv_workflow, hiv_train)
+
+#make predictions
+hiv_train_pred <-  predict(hiv_fit_train, 
+          new_data = hiv_train %>% select(-cleaved), type = "prob") %>%
+  bind_cols(
+    truth = factor(hiv_train$cleaved),
+    .,
+    predict(hiv_fit_train, 
+            new_data = hiv_train %>% select(-cleaved), type = "class"))
+
+```
+
+```{r Testing metrics}
+
+require(yardstick)
+#confusion matrix
+hiv_train_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+hiv_train_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+#metric set
+classification_metrics <- metric_set(accuracy, mcc, f_meas) 
+classification_metrics(hiv_train_pred, truth = truth, estimate = .pred_class)
+
+```
+
+```{r Fit and Predict on Test Data}
+
+#fit the model 
+hiv_fit_test <- fit(hiv_workflow, hiv_test)
+
+#make predictions
+hiv_test_pred <- 
+  predict(hiv_fit_test, 
+          new_data = hiv_train %>% select(-cleaved), type = "prob") %>%
+  bind_cols(
+    truth = factor(hiv_train$cleaved),
+    .,
+    predict(hiv_fit_test, 
+            new_data = hiv_train %>% select(-cleaved), type = "class"))
+```
+
+```{r Metrics on Test Data}
+
+require(yardstick)
+#confusion matrix
+hiv_test_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+hiv_test_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+#metric set
+classification_metrics <- metric_set(accuracy, mcc, f_meas) 
+classification_metrics(hiv_test_pred, truth = truth, estimate = .pred_class)
+
+```
+
+```{r Comparing the trainin and testing with roc}
+
+require(yardstick)
+train_auc <- 
+  hiv_train_pred %>% 
+  roc_curve(truth = truth, .pred_NO)  %>% 
+  mutate(Dataset = "Training set")
+
+#Yuden J point for testing dataset
+hiv_train_pred %>% 
+j_index(truth, .pred_class)
+
+
+testing_auc <- 
+  hiv_test_pred %>% 
+  roc_curve(truth = truth, .pred_NO) %>% 
+    mutate(Dataset = "Test set")
+
+#Yuden J point for testing dataset
+hiv_test_pred %>% 
+j_index(truth, .pred_class)
+
+```
+
+```{r plotting the ROC curve}
+
+bind_rows(train_auc, testing_auc) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, col = Dataset)) + 
+  geom_path(lwd = 1.5, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  scale_color_viridis_d(option = "plasma", end = .6)+
+  theme_clean()
+
+##END
+```
