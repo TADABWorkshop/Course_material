@@ -308,7 +308,7 @@ train_auc <-
   roc_curve(truth = truth, .pred_NO)  %>% 
   mutate(Dataset = "Training set")
 
-#Yuden J point for testing dataset
+#Yuden J point for training dataset
 hiv_train_pred %>% 
 j_index(truth, .pred_class)
 
