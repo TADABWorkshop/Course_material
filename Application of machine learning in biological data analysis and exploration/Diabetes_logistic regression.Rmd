@@ -1,0 +1,362 @@
+---
+title: "Diabetes"
+author: "Manuel Tiburtini"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+---
+
+## **About Dataset**
+
+### **Context**
+
+This dataset is originally from the National Institute of Diabetes and Digestive and Kidney Diseases. The objective is to predict based on diagnostic measurements whether a patient has diabetes.
+
+### **Content**
+
+Several constraints were placed on the selection of these instances from a larger database. In particular, all patients here are females at least 21 years old of Pima Indian heritage.
+
+-   **Pregnancies**: Number of times pregnant 
+
+-   **Glucose**: Plasma glucose concentration a 2 hours in an oral glucose tolerance test 
+
+-   **BloodPressure**: Diastolic blood pressure (mm Hg) 
+
+-   **SkinThickness**: Triceps skin fold thickness (mm) 
+
+-   **Insulin**: 2-Hour serum insulin (mu U/ml) 
+
+-   **BMI**: Body mass index (weight in kg/(height in m)\^2) 
+
+-   **DiabetesPedigreeFunction**: Diabetes pedigree function that calculates diabetes likelihood depending on the subject's age and his/her diabetic family history.
+
+-   **Age**: Age (years) 
+
+-   **Outcome**: Class variable (0 or 1), where 0 is no diabetes and 1 is diabetes
+
+#### **Sources:**
+
+(a) Original owners: National Institute of Diabetes and Digestive and\
+    Kidney Diseases\
+(b) Donor of database: Vincent Sigillito (vgs\@aplcen.apl.jhu.edu)\
+    Research Center, RMI Group Leader\
+    Applied Physics Laboratory\
+    The Johns Hopkins University\
+    Johns Hopkins Road\
+    Laurel, MD 20707\
+
+<!-- -->
+
+(301) 953-6231\
+
+<!-- -->
+
+(c) Date received: 9 May 1990
+
+## Let's get started
+
+```{r Loading packages}
+start <- Sys.time()
+library(conflicted) #resolving conflicting functions
+library(tidyverse) #for tidy data manipulation
+conflict_prefer("precision", "precision")
+```
+
+### Importing data
+
+```{r importing the data}
+
+Diabetes <- read.csv("~/Desktop/Material TADAB Workshop/Datasets/Diabetes/diabetes.csv")
+
+
+
+```
+
+### Data inspection
+
+```{r converting the outcome to a factor with 2 levels}
+
+glimpse(Diabetes)
+
+Diabetes <- Diabetes %>% 
+  mutate(diabetes = ifelse(Outcome == 1, "YES", "NO"), .keep="unused") %>% 
+  mutate(diabetes = as.factor(diabetes))
+
+```
+
+```{r checking type of data}
+library(visdat)
+
+vis_dat(Diabetes)
+
+#type of data
+```
+
+```{r checking missing data}
+vis_miss(Diabetes)
+
+#the data is all observed
+```
+
+### Data visualization
+
+```{r Visualizing the data}
+library(GGally) # paired plots 
+library(ggthemes) #fancy themes
+
+#visualizing paired data
+ggpairs(Diabetes, columns = 1:9, ggplot2::aes(colour=diabetes, alpha=0.4), 
+        lower=list(combo=wrap("facethist", binwidth=10)), progress = FALSE)+
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+
+# in the data are present zeros
+
+```
+
+```{r checking the distribution of zeros}
+
+Diabetes %>% 
+  summarize_all(~ sum(. == 0)) %>% 
+  pivot_longer(everything(), names_to = "feature", values_to = "zeros") %>% 
+  arrange(desc(zeros)) %>% 
+  filter(zeros>0) %>% 
+  mutate(perc_zeros=zeros/nrow(Diabetes)) %>%
+  ggplot(aes(x=reorder(feature, desc(perc_zeros)), y=perc_zeros, fill=feature))+
+  geom_bar(stat="identity", color="black")+
+  xlab("Features")+
+  ylab("zeros")+
+  scale_y_continuous(labels = function(x) paste0(x*100, "%"))+
+  theme_minimal()
+
+```
+
+Zeros are common, different choices can be made here, for simplicity, we keep them as zeros.
+
+### Data splitting 
+
+```{r splitting data}
+#load the metapackage
+library(tidymodels)
+require(rsample)
+#data split
+set.seed(123)
+diabetes_split <- initial_split(Diabetes, strata = "diabetes")
+
+#check
+diabetes_split
+
+#split
+diabetes_train <- training(diabetes_split)
+diabetes_test <- testing(diabetes_split)
+
+```
+
+### Data visualization: how much are variables correlated?
+
+```{r visualizing correlations}
+library(corrplot)
+require(grDevices)
+
+corr_cols <- colorRampPalette(c("#91CBD765", "#CA225E"))
+
+#correlation plot
+diabetes_train %>%
+    select(-diabetes) %>%
+    cor() %>%
+    corrplot(col = corr_cols(200), tl.col = "black", method =
+"ellipse")
+
+#correlation mean 
+diabetes_train %>%
+    select(-diabetes) %>%
+    cor() %>%
+    data.frame() %>% 
+    summarise(across(where(is.numeric), .fns = 
+                     list(mean = mean,
+                          stdev = sd))) %>% 
+    pivot_longer(everything(), names_sep='_', names_to=c('variable', '.value'))
+
+```
+
+### Setting the Logistic regression engine
+
+```{r Set the engine!}
+require(parsnip)
+glm_model <- logistic_reg() %>% 
+  set_engine("glm") %>%
+  set_mode("classification") 
+
+#check the engine glm
+glm_model
+
+```
+
+### Recipes : preprocessing data
+
+#### When setting the recipe....
+
+\
+recipe(diabetes \~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, data = diabetes_train)\
+\
+is the same as writing\
+\
+(diabetes \~ ., data = diabetes_train)
+
+```{r Set up the receipe}
+
+diabetes_recipe <- 
+ recipe(diabetes ~  Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, # Specify the model
+    data = diabetes_train
+  ) 
+#the simplest recipe
+
+# if we would like to transform the data with step_log, we can juice the recipe and check the result
+
+#juice(diabetes_prep) %>% 
+#  ggpairs(., columns = 1:9, ggplot2::aes(colour=diabetes, alpha=0.4), 
+#        lower=list(combo=wrap("facethist", binwidth=10)), progress = FALSE)+
+#  theme_minimal()+
+#  theme(panel.grid=element_blank())
+  
+#check the step that will be done by the model 
+diabetes_recipe
+```
+
+### Workflow
+
+```{r Set up the workflow }
+
+#prepare the workflow
+diabetes_workflow <-
+  workflow() %>%
+  add_model(glm_model) %>%
+  add_recipe(diabetes_recipe)
+
+
+#check the workflow
+diabetes_workflow
+```
+
+### Extract predictions from the training set
+
+```{r Fit and Predict on Training Data}
+
+#fit the model
+diabetes_fit_train <- fit(diabetes_workflow, diabetes_train)
+
+#make predictions
+diabetes_train_pred <-  predict(diabetes_fit_train, 
+          new_data = diabetes_train %>% select(-diabetes), type = "prob") %>%
+  bind_cols(
+    truth = factor(diabetes_train$diabetes),
+    .,
+    predict(diabetes_fit_train, 
+            new_data = diabetes_train %>% select(-diabetes), type = "class"))
+
+diabetes_train_pred
+```
+
+#### Metrics of the training set
+
+```{r Metrics on Training Data}
+
+
+require(yardstick)
+#confusion matrix
+diabetes_train_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+diabetes_train_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+#metric set
+classification_metrics <- metric_set(precision,recall, accuracy, mcc, f_meas) 
+classification_metrics(diabetes_train_pred, truth = truth, estimate = .pred_class)
+
+```
+
+### Fit on the test set
+
+```{r Fit and Predict on Test Data}
+
+#fit the model 
+diabetes_fit_test <-  fit(diabetes_workflow, diabetes_test)
+
+diabetes_fit_test
+
+#make predictions
+diabetes_test_pred <- 
+ predict(diabetes_fit_test, 
+          new_data = diabetes_test %>% select(-diabetes), type = "prob") %>%
+  bind_cols(
+    truth = factor(diabetes_test$diabetes),
+    .,
+    predict(diabetes_fit_test, 
+            new_data = diabetes_test %>% select(-diabetes), type = "class"))
+
+diabetes_test_pred
+```
+
+#### Metrics of the test set
+
+```{r Metrics on Test Data}
+
+require(yardstick)
+#confusion matrix
+diabetes_test_pred %>% conf_mat(truth = truth, estimate = .pred_class)
+
+#accuracy
+diabetes_test_pred %>% accuracy(., truth= truth, estimate =.pred_class)
+
+diabetes_test_pred %>% roc_auc(truth = truth, .pred_NO)
+
+#metric set
+classification_metrics <- metric_set(accuracy, mcc, f_meas) 
+classification_metrics(diabetes_test_pred, truth = truth, estimate = .pred_class)
+
+```
+
+### ROC analysis
+
+```{r Comparing the trainin and testing with roc}
+
+require(yardstick)
+train_auc <- 
+  diabetes_train_pred %>% 
+  roc_curve(truth = truth, .pred_NO)  %>% 
+  mutate(Dataset = "Training set")
+
+#Yuden J point for testing dataset
+diabetes_train_pred %>% 
+j_index(truth, .pred_class)
+
+
+testing_auc <- 
+  diabetes_test_pred %>% 
+  roc_curve(truth = truth, .pred_NO) %>% 
+    mutate(Dataset = "Test set")
+
+#Yuden J point for testing dataset
+diabetes_test_pred %>% 
+j_index(truth, .pred_class)
+
+```
+
+```{r Plotting the ROC curves}
+
+bind_rows(train_auc, testing_auc) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, col = Dataset)) + 
+  geom_path(lwd = 1.5, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  scale_color_viridis_d(option = "plasma", end = .6)+
+  theme_clean()
+
+Sys.time() - start 
+##END running time 10.47secs
+```
+
+## Conclusion 
+
+Here we have shown how to train a logististic regression model for classification using tidymodels, split the data and test on the test set comparing the results with a ROC.
