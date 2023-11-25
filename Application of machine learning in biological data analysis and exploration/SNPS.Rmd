@@ -1,0 +1,419 @@
+---
+title: "SNPs"
+author: "Manuel Tiburtini"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+# Data explanation
+
+We are going to explore one of the commonest case of high dimentional data. Genetic data. Each locus is a feature and usually, thera are hundreds of dimention with few individuals. Here, we are going to compare the results of 3 different dimentionality reduction of SNPs data from a study of Franzoni et al., 2023 where by relating genetic divergence at neutral loci, phenotypic variation, and geographic andenvironmental distances, it is possible to dissect micro-evolutionary scenarios involving natural selection and neutral evolution. In this work, they tested the patterns of intraspecific genetic andphenotypic variation along an elevational gradient, using Dianthus virgineus as study system, genotyped genome-wide SNPs through ddRAD sequencing. Thus there are 12 population from Tuscany where genotipic data where sequenced. For mor, check : <https://www.researchgate.net/publication/374846252_Weak_genetic_isolation_and_putative_phenotypic_selection_in_the_wild_carnation_Dianthus_virgineus_Caryophyllaceae>[accessed Nov 25 2023].
+
+![](images/mappa.png)
+
+```{r loading packages and data, include=FALSE}
+library(visdat)
+library(tidyverse)
+library(tidyselect)
+library(tidymodels)
+library(conflicted)
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+
+
+SNPs <- read.csv("~/Desktop/Material TADAB Workshop/Datasets/Dianthus /SNPs.csv", stringsAsFactors=TRUE)
+glimpse(SNPs)
+start <- Sys.time()
+```
+
+### Data exploration
+
+```{r looking at the data}
+
+vis_dat(SNPs)
+
+#we notice that there are some adjustment neeeded
+SNPs <- SNPs %>% 
+  mutate(ind = as.character(ind)) %>% 
+  mutate(pop = case_when(
+    pop =="Apenn200"~ "M.te Pisano",
+    pop =="Apenn201"~	"Is.Elba",
+    pop =="Apenn202"~	"Poggio Pelato",
+    pop =="Apenn203"~	"M.te Rufoli",
+    pop =="Apenn204"~	"Argentario",
+    pop =="Apenn205"~	"Stribugliano",
+    pop =="Apenn206"~	"Alpi Apuane",
+    pop =="Apenn207"~	"M.te Le Coste",
+    pop =="Apenn208"~	"Sassso di Castro",
+    pop =="Apenn209"~	"Pania Corfino",
+    pop =="Apenn210"~	"Libro Aperto",
+    pop =="Apenn211"~	"Is. Capraia",
+    TRUE ~ pop
+  ),.keep=c("unused"), .after="ind")
+
+
+
+#ok
+glimpse(SNPs)
+
+```
+
+### Understanding the pattern of missingess
+
+Single nucleotide polymorphisms (SNPs) are variations in a single nucleotide that occur at a specific position in the genome. These variations are a common form of genetic diversity among individuals that may or not present in some individuals. The presence of missing values in SNP data is a common issue and can arise from various sources.
+
+1.  **Genotyping errors**
+
+2.  **Population-specific variations**
+
+3.  **Rare variant**
+
+We may suspect that indels and genotypic errors may have different proportions in the data, thus we after some trial and error, we may decide to discards columns where there is more than 30% of missing loci to get a full matrix.
+
+```{r exploring pattern of missigness}
+library(visdat)
+library(mice) 
+library(broom)
+
+#visualizing the pattern of missiness data
+vis_miss(SNPs, sort_miss = TRUE, cluster = TRUE)+
+    theme(axis.text.x = element_blank())
+
+#there are some SNPs with more than 100 missing datapoints, removing columns with more than 30% of missing data
+missing_features <- SNPs %>%
+  summarise_all(~sum(is.na(.))) %>%
+  pivot_longer(cols = everything(), names_to = "column", values_to = "missing_count") %>%
+  mutate(perc_miss = missing_count / nrow(SNPs)) %>%
+  filter(perc_miss > 0.30) %>%
+  pull(column)
+  
+  
+SNPs <- SNPs %>% 
+  dplyr::select(-one_of(missing_features))
+
+#let'scheck again
+vis_miss(SNPs, sort_miss = TRUE, cluster = TRUE) +
+  theme(axis.text.x = element_blank())
+```
+
+### Filling indels
+
+Since in this case, indels represent an information about the genetic structure of the populations, we are going to change the remain NAs with a value 3 representing the indel state for that locus.
+
+```{r fill NAs with 3 representing indels}
+SNPs.full <- SNPs %>% 
+  replace(is.na(.), 3)
+
+#let'scheck again
+require(visdat)
+vis_miss(SNPs.full, sort_miss = TRUE, cluster = TRUE)+
+  theme(axis.text.x = element_blank())
+
+#ready to go!
+```
+
+## **Independent Component Analysis**
+
+Independent Component Analysis (ICA) is a statistical and computational technique used in machine learning to separate a multivariate signal into its independent non-Gaussian components. ICA assumes that the observed data is a linear combination of independent, non-Gaussian signals. The goal of ICA is to find a linear transformation of the data that results in a set of independent components.
+
+1.  ICA is a powerful technique used for a variety of applications, such as signal processing, image analysis, and data compression. ICA has been used in a wide range of fields, including finance, biology, and neuroscience.
+
+2.  The basic idea behind ICA is to identify a set of basis functions that can be used to represent the observed data. These basis functions are chosen to be statistically independent and non-Gaussian. Once these basis functions are identified, they can be used to separate the observed data into its independent components.
+
+3.  ICA is often used in conjunction with other machine learning techniques, such as clustering and classification. For example, ICA can be used to pre-process data before performing clustering or classification, or it can be used to extract features that are then used in these tasks.
+
+ICA has some limitations, including the assumption that the underlying sources are non-Gaussian and that they are mixed linearly. Additionally, ICA can be computationally expensive and can suffer from convergence issues if the data is not properly pre-processed.
+
+Despite these limitations, ICA remains a powerful and widely used technique in machine learning and signal processing
+
+### **Advantages of Independent Component Analysis (ICA):**
+
+1.  Ability to separate mixed signals: ICA is a powerful tool for separating mixed signals into their independent components. This is useful in a variety of applications, such as signal processing, image analysis, and data compression.
+
+2.  Non-parametric approach: ICA is a non-parametric approach, which means that it does not require assumptions about the underlying probability distribution of the data.
+
+3.  Unsupervised learning: ICA is an unsupervised learning technique, which means that it can be applied to data without the need for labeled examples. This makes it useful in situations where labeled data is not available.
+
+4.  Feature extraction: ICA can be used for feature extraction, which means that it can identify important features in the data that can be used for other tasks, such as classification.
+
+### Assumptions
+
+1.  The independent components generated by the ICA are assumed to be statistically independent of each other.
+
+2.  The independent components generated by the ICA must have non-gaussian distribution.
+
+3.  The number of independent components generated by the ICA is equal to the number of observed mixtures.
+
+*In R FastICA non-gaussianity is measured using approximations to neg-entropy*
+
+### Independent component analysis
+
+```{r ICA}
+library(fastICA)
+library(tidymodels)
+library(ggthemes)
+
+set.seed(123)
+ica.recipe<- recipe(~., data=SNPs.full) %>% 
+  update_role(pop, new_role="class") %>% 
+  update_role(ind, new_role="id") %>% 
+  step_ica(all_numeric_predictors(), 
+           num_comp=3, options = "deflation") 
+#scaling and centering is part of the fastICA function, thus not required
+
+ica.recipe %>% 
+  prep() %>% 
+  juice() %>% 
+  ggplot(., aes(x=IC1, y=IC2, color=pop))+
+  geom_point(size=2, alpha=0.5)+
+  theme_clean()+
+  theme(panel.grid.major.y = element_blank())+
+  guides(color =guide_legend(title = "Populations"))
+  
+
+```
+
+### Principal Component Analysis
+
+Principal Component Analysis, or PCA, is a powerful statistical technique used in data analysis and dimensionality reduction. It aims to simplify complex datasets by transforming them into a new set of uncorrelated variables called principal components. These components capture the most significant patterns of variation in the original data, allowing for a more efficient representation.
+
+### Quick recap
+
+| Feature                                | Principal Component Analysis (PCA)                             | Independent Component Analysis (ICA)                                  |
+|-------------------|--------------------------|----------------------------|
+| **Objective**                          | Maximize variance of data points.                              | Maximize independence of components.                                  |
+| **Focus**                              | Captures global patterns in the data.                          | Identifies statistically independent components.                      |
+| **Assumption about data distribution** | Assumes data follows a Gaussian distribution.                  | Assumes sources are non-Gaussian and mixed linearly.                  |
+| **Linearity of components**            | Assumes linear combination of original features.               | Assumes linear combination of independent sources.                    |
+| **Use cases**                          | Dimensionality reduction, noise reduction, feature extraction. | Dimensionality reduction, signal separation, feature extraction.      |
+| **Supervised/Unsupervised**            | Unsupervised.                                                  | Unsupervised.                                                         |
+| **Requirement for labeled data**       | Needs Numeric data                                             | Needs Numeric data                                                    |
+| **Computational efficiency**           | Generally computationally efficient.                           | Can be computationally expensive, especially for large datasets.      |
+| **Unique solution**                    | Yes, components are unique linear combinations.                | may not give unique solution, multiple solutions are possible.        |
+| **Interpretability**                   | Components may not have clear physical meaning.                | Components often represent physically meaningful independent sources. |
+| **Application areas**                  | Image analysis, face recognition, dimensionality reduction.    | Signal processing, source separation, blind signal separation.        |
+
+```{r setting the recipe}
+library(learntidymodels)
+library(recipes)
+library(parsnip)
+library(workflows)
+library(ggplot2)
+
+pca.recipe <- recipe(~., data=SNPs.full) %>% 
+  update_role(pop, new_role="class") %>% 
+  update_role(ind, new_role="id") %>% 
+  step_normalize(all_numeric_predictors()) %>% 
+  step_pca(all_numeric_predictors(), num_comp = 4)
+
+```
+
+### Visualizing loadings, explained variance and ordination plots
+
+```{r loadings}
+
+#loadings
+pca.recipe %>% 
+  prep() %>% 
+  plot_top_loadings(component_number <= 4, n = 5) +
+    scale_fill_brewer(palette = "Paired") +
+    ggtitle("Principal Component Analysis")+
+  theme_clean()
+
+pca.recipe %>% 
+  prep() %>% 
+  tidy(2) %>% 
+  filter(component %in% paste0("PC", 1:5)) %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(value, terms, fill = terms)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~component, nrow = 1) +
+  labs(y = NULL)+
+  theme(axis.text.y = element_blank())
+
+#custom function to extract explained variance
+extract_explained_variace <- function(pca_recipe, n_comp = NULL, steps) {
+  if (!tune::is_recipe(pca_recipe)) {
+    stop("Input must be a recipe.")
+  } else {
+    pca_result <- pca_recipe %>%
+      prep() %>%
+      pluck("steps", steps, "res", "sdev") %>% 
+      tibble(sdev = .) %>% 
+      mutate(var_expl = round((sdev^2 / sum(sdev^2)) * 100, 2), .keep = "unused") %>%
+      rownames_to_column("PC") %>%
+      mutate(PC = paste0("PC", row_number()),
+             PC = factor(PC, levels = unique(PC)))
+
+    if (!is.null(n_comp)) {
+      pca_result <- pca_result %>% 
+        slice(1:n_comp)
+    }
+
+    return(pca_result)
+  }
+}
+
+#plot the scree plot
+pca.recipe %>% 
+extract_explained_variace(n_comp=10, steps = 2) %>% 
+   ggplot(aes(PC, var_expl)) +
+  geom_col(fill = "#56B4E9", alpha = 0.8) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1))+
+  theme_clean()
+  
+#plotting pca with explained variance
+pca.recipe %>% 
+  prep() %>% 
+  juice() %>% 
+  ggplot(aes(x = PC1, y = PC2, color = pop)) +
+  xlab(paste0("PC1: ", 
+              extract_explained_variace(pca.recipe, 1, steps = 2)$var_expl[1], 
+              "%")) +
+  ylab(paste0("PC2: ",  
+              extract_explained_variace(pca.recipe, 2, steps = 2)$var_expl[2], 
+              "%")) +
+  geom_point(size = 2, alpha = 0.5) +
+  theme_clean()+
+  theme(panel.grid.major.y = element_blank())+
+  guides(color =guide_legend(title = "Populations"))
+
+```
+
+## UMAP a non Linear Dimentionality Reduction algorithm
+
+UMAP stands for **Uniform Manifold Approximation and Projection** and uses a graph layout algorithms to arrange data in low-dimensional space. In the simplest sense, UMAP constructs a high dimensional graph representation of the data then optimizes a low-dimensional graph to be as structurally similar as possible. While the mathematics UMAP uses to construct the high-dimensional graph is advanced, the intuition behind them is remarkably simple.
+
+Check this out! [Play with UMAP](https://pair-code.github.io/understanding-umap/)
+
+Be aware!
+
+1.   Hyperparameters really matter
+
+    Choosing good values isn't easy, and depends on both the data and your goals (eg, how tightly packed the projection ought to be). This is where UMAP's speed is a big advantage - By running UMAP multiple times with a variety of hyperparameters, you can get a better sense of how the projection is affected by its parameters.
+
+2.  Cluster sizes in a UMAP plot mean nothing
+
+    The size of clusters relative to each other is essentially meaningless. This is because UMAP uses local notions of distance to construct its high-dimensional graph representation.
+
+3.  Distances between clusters might not mean anything
+
+    The distances between clusters is likely to be meaningless. While it's true that the global positions of clusters are better preserved in UMAP, the distances between them are not meaningful. Again, this is due to using local distances when constructing the graph.
+
+4.  Random noise doesn\'t always look random.
+
+    Especially at low values of `n_neighbors`, spurious clustering can be observed.
+
+5.  You may need more than one plot
+
+    Since the UMAP algorithm is stochastic, different runs with the same hyperparameters can yield different results. Additionally, since the choice of hyperparameters is so important, it can be very useful to run the projection multiple times with various hyperparameters.
+
+### Data splitting
+
+```{r data split}
+set.seed(123)
+SNPs_split <- initial_split(SNPs.full, strata = pop)
+
+SNPs_train <- SNPs_split %>% training()
+SNPs_test <- SNPs_split %>% testing()
+
+```
+
+```{r non-linear dimentionality reduction: UMAP}
+library(tidymodels)
+library(embed)
+library(umap) #for step_umap
+
+#unsupervised dimentionality reduction
+umap_rec_unsup <- recipe(~., data = SNPs_train) %>% 
+    update_role(pop, new_role="class") %>%
+    update_role(ind, new_role="id") %>% 
+    step_normalize(all_predictors()) %>% 
+    step_umap(all_predictors())
+
+      
+#supervised dimentionality reduction
+
+umap_rec_sup <- recipe(~., data = SNPs_train) %>% 
+    update_role(pop, new_role="class") %>%
+    update_role(ind, new_role="id") %>% 
+    step_normalize(all_predictors()) %>% 
+    step_umap(all_predictors(),
+              outcome = vars(pop),
+               num_comp = 4)
+
+```
+
+### Unsupervised UMAP
+
+```{r unsupervised UMAP}
+
+umap_rec_unsup %>% 
+  prep() %>% 
+  juice() %>% 
+  ggplot(aes(x = UMAP1, y = UMAP2, color = pop)) +
+  geom_point(size = 2, alpha = 0.5) +
+  theme_clean() +
+  guides(color =guide_legend(title = "Populations"))+
+  theme(panel.grid.major.y = element_blank())
+
+```
+
+### Supervised UMAP
+
+Dimentionality reduction can be performed both supervised and unsupervised. Input labeled data provide a strong information to the DR algorithm. This explain why cluster are more tight.
+
+```{r supervised UMAP}
+#we are going to use populations as grouping 
+umap_rec_sup %>% 
+  prep() %>% 
+  juice() %>% 
+  ggplot(aes(x = UMAP1, y = UMAP2, color = pop)) +
+  geom_point(size = 2, alpha = 0.5) +
+  theme_clean() +
+  guides(color =guide_legend(title = "Populations"))+
+  theme(panel.grid.major.y = element_blank())
+
+```
+
+```{r supervised UMAP}
+#we are going to use populations as grouping 
+library(plotly)
+library(RColorBrewer)
+umap_rec_sup %>% 
+  prep() %>% 
+  juice() %>% 
+  plotly::plot_ly( x = ~UMAP1, y = ~UMAP2, z = ~UMAP3, color = ~.$pop, colors = brewer.pal(7, "Dark2")) %>% 
+  plotly::add_markers() %>% 
+  plotly::layout(scene = list(xaxis = list(title = 'UMAP1'), 
+                                     yaxis = list(title = 'UMAP2'), 
+                                     zaxis = list(title = 'UMAP3'))) 
+
+
+```
+
+## Predicting new points in a trained UMAP
+
+A manifold is**an object of *d*-dimensionality that is embedded in some higher dimensional space**. Imagine a set of points on a sheet of paper. If we crinkle up the paper, the points are now in 3 dimensions. Many manifold learning algorithms seek to "uncrinkle" the sheet of paper to put the data back into 2 dimensions. Here we project new point into the same Riemannian manifold as the training data and see what's going to happen.
+
+```{r using a trained UMAP, we can put new data in the same manifold}
+
+umap_rec_sup %>% 
+  prep() %>% 
+  bake(new_data=SNPs_test) %>% 
+  ggplot(aes(x = UMAP1, y = UMAP2, color = pop)) +
+  geom_point(size = 2, alpha = 0.5) +
+  theme_clean() +
+  guides(color =guide_legend(title = "Populations"))+
+  theme(panel.grid.major.y = element_blank())
+
+
+library(beepr)
+beep()
+Sys.time() - start 
+#END running time 22.06 secs
+```
+
+# Concluding remarks
+
+Unsupervised learning can be used both as explorative and as clustering and as preprocessing of data during the training of a supervised ML workflow. My suggestion during a data analysis is to try both linear and non linear DR techniques to see if the results are congruent each other and if the results what you may expect from your study system.
