@@ -1,5 +1,5 @@
 ---
-title: "Putting all together - beans"
+title: "Going beyond - beans"
 author: "Manuel Tiburtini"
 date: "`r Sys.Date()`"
 output: html_document
