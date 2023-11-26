@@ -1,6 +1,6 @@
 ---
 title: "Diabetes_svm"
-author: "Manuel Tiburtini - Sina Gholami"
+author: "Manuel Tiburtini"
 date: "`r Sys.Date()`"
 output: html_document
 ---
