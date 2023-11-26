@@ -1,0 +1,371 @@
+---
+title: "DBSCAN"
+author: "Manuel Tiburtini"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+# Introduction
+
+We are going to explore how DBSCAN and HDBSCAN can be used in clustering density based.
+
+# Data explanation
+
+\
+The age of abalone is determined by cutting the shell through the cone, staining it, and counting the number of rings through a microscope \-- a boring and time-consuming task. Other measurements, which are easier to obtain, are used to predict the age. Further information, such as weather patterns and location (hence food availability) may be required to solve the problem.
+
+```{r setup, include=FALSE}
+
+abalone <- read.csv("~/Desktop/Material TADAB Workshop/Datasets/abalone/abalone.csv")
+
+
+```
+
+## Checking the data
+
+```{r checking the data}
+library(visdat)
+
+vis_miss(abalone)
+vis_dat(abalone)
+
+```
+
+## Data preparation
+
+```{r data preparation}
+glimpse(abalone)
+
+abalone <- abalone %>% 
+  mutate(Sex=as.factor(Sex)) 
+
+abalone <- abalone %>% mutate(age=case_when(
+  Sex == "F"~"A",
+  Sex == "I"~"I",
+  Sex == "M"~"A", 
+  TRUE ~ Sex
+  ),.keep=c("unused"), .before=Length) %>% 
+    mutate(age=as.factor(age))
+
+```
+
+```{r visualization of paired plot}
+library(GGally)
+require(ggthemes)
+
+#function to add regression lines
+lowerFn <- function(data, mapping, emap=NULL, method = "lm", ...) {
+  # mapping <- c(mapping, emap)
+  # class(mapping) = "uneval" # need this to combine the two aes
+  # Can use this instead
+  mapping <- ggplot2:::new_aes(c(mapping, emap))
+  p <- ggplot(data = data, mapping = mapping) +
+    geom_point() +
+    geom_smooth(method = method, ...) +
+    theme_classic() # to get the white background and prominent axis
+  p
+}
+
+
+abalone %>% 
+  ggpairs(columns = 1:9, ggplot2::aes(colour=age, alpha=0.4), progress = FALSE, lower = list(continuous = wrap(lowerFn, 
+                                 method = "lm", fullrange=TRUE, se=FALSE,
+                                 emap=aes(color=age)))) +
+  theme_minimal()+
+  theme(panel.grid=element_blank())
+
+
+```
+
+## Checking outliers
+
+```{r  How many outliers are there?}
+require(rstatix)
+
+abalone %>%
+  select(where(is.numeric)) %>% 
+  mutate(across(everything(), ~ifelse(is_outlier(., coef = 2.5), TRUE, FALSE), .names = "is_outlier_{.col}")) %>%
+  summarise(across(starts_with("is_outlier"), sum)) %>% 
+  pivot_longer(cols = starts_with("is_outlier"), names_to = "variable", values_to = "count") %>% 
+  arrange(desc(count))
+
+
+#DBSCAN handle these strong outliers!
+
+```
+
+## DBSCAN (Density-Based Spatial Clustering of Applications with Noise)
+
+The DBSCAN (Density-Based Spatial Clustering of Applications with Noise) algorithm involves choosing three key parameters: MinPts, ε (epsilon), and the distance function.
+
+1\. **MinPts**:
+
+-   Rule of thumb: MinPts should be at least 3 to avoid trivial clusters.
+
+-   A recommended value is 2 times the number of dimensions (2·dim), but larger values are better for noisy or large datasets.
+
+-   Values less than 3 may result in clustering similar to hierarchical clustering with single link metric.
+
+2\. **ε (Epsilon):**
+
+-   Determined using a k-distance graph, where the distance to the k = MinPts-1 nearest neighbor is plotted.
+
+-   Good ε values are where the plot shows an "elbow," balancing between too small (missing clusters) and too large (merging clusters).
+
+-   Small ε values are generally preferred, and only a small fraction of points should be within this distance of each other.
+
+-   OPTICS plot can alternatively be used to determine ε, and then OPTICS algorithm can be applied for clustering.
+
+3\. **Distance Function:**
+
+-   The choice of the distance function is crucial and linked to ε.
+
+-   The distance function should be chosen based on a reasonable measure of similarity for the dataset.
+
+-   For instance, in geographic data, the great-circle distance is often a suitable choice.
+
+-   No estimation for the distance function; it needs to be selected appropriately for the specific dataset.
+
+DBSCAN involves choosing MinPts (preferably ≥ 3), ε through a k-distance graph or OPTICS plot, and an appropriate distance function based on the dataset's characteristics.
+
+## **Selecting Hyperparameters in DBSCAN**
+
+To apply DBSCAN, we need to decide on the neighborhood radius eps and the density threshold minPts. Starting from eps, the idea behind this heuristic is that points located inside of clusters will have a small k-nearest neighbor distance, because they are close to other points in the same cluster, while noise points are more isolated and will have a rather large kNN distance.
+
+```{r looking for the best eps}
+library(dbscan)
+
+abalone.dist <- abalone %>%
+  select(-age) %>% 
+  scale() %>% 
+  dist()
+
+kNNdistplot(abalone.dist, k = 5)
+abline(h = 1.7, col = "red", lty = 2)
+eps <-  1.7
+
+plot(optics(abalone.dist, eps = eps, minPts = 10))
+```
+
+The rule of thumb for setting minPts is to use at least the number of dimensions of the dataset plus one. In our case, this is 10.
+
+```{r apply dbscan}
+
+dbscan.res <- dbscan(abalone.dist, eps = eps, minPts = 10)
+unique(dbscan.res$cluster)
+
+
+#let's try to loop across different values of minPts to find how the numer of clusters varies.
+
+#finding the optimal values
+npoints <- c(2:50)
+
+noisepoints <- vector("list", 49)
+cluster <- vector("list", 49)
+
+for (points in npoints) {
+  dbscan_result <- dbscan(abalone.dist, eps = eps, minPts = points)
+  noisepoints[[points]] <- sum(dbscan_result$cluster == 0)
+  cluster[[points]] <- length(unique(dbscan_result$cluster))
+}
+
+mod.selection <- data.frame(minPoints = npoints, noisepoints = unlist(noisepoints[-1]), cluster = unlist(cluster[-1]))
+
+
+dbscan.res <- dbscan(abalone.dist, eps = eps, minPts = 3)
+#still we are getting nowhere...
+dbscan.res
+```
+
+## Comparing the number of cluster with k-means and DBSCAN
+
+```{r using parameter package}
+
+library(parameters)
+#with kmeann
+n_clusters_silhouette(
+  abalone[,-1],
+  standardize = TRUE,
+  include_factors = FALSE,
+  clustering_function = stats::kmeans,
+  n_max = 10,
+)
+
+```
+
+Even using the method based on the k-nearest neighbor distance plot described above, it is sometimes hard to find appropriate parameter values. This is in part because the parameters are interrelated and the algorithm can be very sensitive to small parameter changes.
+
+## HDBSCAN (Hierarchical Density-Based Spatial Clustering of Applications with Noise)
+
+HDBSCAN, or Hierarchical Density-Based Spatial Clustering of Applications with Noise, is a clustering algorithm that identifies clusters in data based on the density of points. Unlike traditional methods, HDBSCAN can discover clusters of varying shapes and sizes and effectively handle noise.
+
+The algorithm begins by computing a density-based hierarchy of clusters, creating a tree-like structure called a "condensed tree." It then extracts stable clusters from this hierarchy by condensing branches with stable density levels. The resulting clusters are obtained by cutting the tree at a specific density level.
+
+HDBSCAN offers advantages such as automatic determination of cluster shapes and sizes, robustness to varying density, and the ability to detect outliers as noise. In building the tree, it searches different values of eps, thus the sole hyperparameter that is required is the minPoints comparing with DBSCAN.
+
+```{r why do not try hdbscan}
+
+#finding the optimal values
+npoints <- c(2:50)
+
+noisepoints <- vector("list", 49)
+cluster <- vector("list", 49)
+for (points in npoints){
+  hdbscan.mod <- 
+  hdbscan(abalone.dist,
+  minPts=points,
+  gen_hdbscan_tree = TRUE,
+  gen_simplified_tree = FALSE,
+  verbose = FALSE)
+  noisepoints[[points]] <- length(which(ifelse(hdbscan.mod$cluster==0, TRUE, FALSE)==TRUE))
+  cluster[[points]] <- length(unique(hdbscan.mod$cluster))
+}
+
+mod.selection<- data.frame(minPoints=npoints, noisepoints=unlist(noisepoints[-1]), cluster=unlist(cluster[-1]))
+
+hdbscan.mod <- 
+  hdbscan(abalone.dist,
+  minPts=5,
+  gen_hdbscan_tree = TRUE,
+  gen_simplified_tree = FALSE,
+  verbose = FALSE)
+
+plot(hdbscan.mod, show_flat	= TRUE)
+
+```
+
+## Clustering metrics
+
+```{r computing classic clustering metrics}
+library(aricode)
+#dbscan
+table(dbscan.res$cluster, abalone$age)
+aricode::NMI(dbscan.res$cluster, abalone$age)
+aricode::ARI(dbscan.res$cluster, abalone$age)
+
+#hdbscan
+table(hdbscan.mod$cluster, abalone$age)
+aricode::NMI(hdbscan.mod$cluster, abalone$age)
+aricode::ARI(hdbscan.mod$cluster, abalone$age)
+
+```
+
+![](images/0*v9HY0MlLtNSV866w.jpg)
+
+## Visualizing clustering results
+
+```{r plotting results in 2D}
+library(tidymodels)
+library(embed)
+
+abalone_rec<- recipe(~., data=abalone) %>% 
+  step_normalize(all_numeric_predictors()) %>% 
+  step_pca(all_numeric_predictors(), num_comp = 2) 
+
+
+abalone_rec %>% 
+  prep() %>% 
+  bake(new_data=NULL) %>% 
+  ggplot(aes(x=PC1, y=PC2, color=abalone$ag))+
+  geom_point()+
+  theme_minimal()
+
+abalone_rec %>% 
+  prep() %>% 
+  bake(new_data=NULL) %>% 
+  ggplot(aes(x=PC1, y=PC2, color=hdbscan.mod$cluster ,alpha=hdbscan.mod$membership_prob))+
+  geom_point()+
+  theme_minimal()
+
+```
+
+## Outlier scores
+
+```{r global outlier score}
+
+top_outliers <- order(hdbscan.mod$outlier_scores, decreasing = T)[1:10]
+  colors <- mapply(function(col, i) adjustcolor(col, alpha.f = hdbscan.mod$outlier_scores[i]), 
+                   palette()[hdbscan.mod$cluster+1], seq_along(hdbscan.mod$cluster))
+  
+  top_outliers
+```
+
+# When does Density Based Clustering give the best?
+
+```{r when does DBSCAN work fine?}
+library(factoextra)
+data("multishapes")
+set.seed(123)
+
+multishapes %>% ggplot(aes(x=x,y=y, shape=factor(shape), color=factor(shape)))+geom_point()+theme_clean()
+
+
+multishape.dist<- multishapes %>% 
+  select(-shape) %>% 
+  dist()  
+
+#finding the optimal values
+npoints <- c(2:50)
+
+noisepoints <- vector("list", 49)
+cluster <- vector("list", 49)
+for (points in npoints){
+  hdbscan.mod <- 
+  hdbscan(multishape.dist,
+  minPts=points,
+  gen_hdbscan_tree = TRUE,
+  gen_simplified_tree = FALSE,
+  verbose = FALSE)
+  noisepoints[[points]] <- length(which(ifelse(hdbscan.mod$cluster==0, TRUE, FALSE)==TRUE))
+  cluster[[points]] <- length(unique(hdbscan.mod$cluster))
+}
+
+mod.selection<- data.frame(minPoints=npoints, noisepoints=unlist(noisepoints[-1]), cluster=unlist(cluster[-1]))
+
+hdbscan.mod <- 
+  hdbscan(multishape.dist,
+  minPts=7,
+  gen_hdbscan_tree = TRUE,
+  gen_simplified_tree = FALSE,
+  verbose = FALSE)
+
+hdbscan.mod
+
+multishapes %>% ggplot(aes(x=x,y=y, color=factor(hdbscan.mod$cluster), alpha=hdbscan.mod$membership_prob))+
+  geom_point()+
+  scale_color_manual(values = c("grey50","#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a", "#fdbf6f", "#a6cee3"))+
+  guides(color=guide_legend(title="clusters"), alpha="none")+
+  theme_clean()
+  
+
+```
+
+# **Final remarks on Density-based  Clustering**
+
+## **Advantages:**
+
+-   It does not need a predefined number of clusters.
+
+-   Basically, clusters can be of any shape, including non-spherical ones.
+
+-   Also, this technique is able to identify noise data (outliers).
+
+-   Unlike K-means, DBSCAN does not need the user to specify the number of clusters to be generated.
+
+-   DBSCAN can find any shape of clusters. Also, the cluster doesn't have to be circular.
+
+-   DBSCAN can identify outliers.
+
+## **Disadvantages:**
+
+-   If there are no density drops between clusters, then density-based clustering will fail.
+
+-   It seems to be difficult to detect noise points if there is variation in the density.
+
+-   It is sensitive to parameters i.e. its hard to determine the correct set of parameters.
+
+-   The quality of DBSCAN depends on the distance measure.
+
+# Conclusions
+
+Density based clustering can be a choice whenever we are not sure of the process generating the data, when we may suspect high number of outlines -that can negatively influence kmeans or other clustering or when cluster have strange and uneven shapes.
