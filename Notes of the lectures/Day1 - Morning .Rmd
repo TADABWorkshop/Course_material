@@ -1,0 +1,510 @@
+---
+title: "Regression analysis of biological data in ecology"
+author: "Sergey rosbakh"
+output: html_notebook
+---
+
+# Introduction
+
+Statistical models are tools, you should know how to use not what's in the background.
+
+```{r}
+# Load ggplot2
+library(ggplot2)
+
+# Set a seed for reproducibility
+# Generate fake data
+x <- seq(1, 30, length.out = 100)
+y <- sqrt(30^2 - x^2) + rnorm(100, mean = 0, sd = 8)
+
+# Create a data frame
+df <- data.frame(x = x, y = pmax(0, y))  # Set negative values to 0
+
+# Plot the data using ggplot2
+ggplot(df, aes(x = x, y = y)) +
+  geom_point(color = "blue", size = 3, alpha = 0.7) +
+  geom_smooth(method = "loess", se = FALSE, color = "red", linetype = "dashed") +
+  labs(title = "Trends", x = "X-axis", y = "Y-axis") +
+  theme_minimal()
+
+```
+
+If you want to communicate a pattern to someone, we need only the red line. We should find pattern in our data and communicate effectively.
+
+```{r Linear vs non linear relation}
+# Generate fake data
+x <- seq(-6, 6, length.out = 100)  # Adjust x-axis limits for sigmoid plot
+
+# Create a data frame for each function
+df_linear <- data.frame(x = x, y = 2 * x + 3)
+df_exponential <- data.frame(x = x, y = exp(x))
+df_rectangular_hyperbola <- data.frame(x = x, y = 10/x)
+df_sigmoid <- data.frame(x = x, y = 1 / (1 + exp(-x)))
+
+# Combine data frames
+df_all <- rbind(
+  cbind(df_linear, type = "Linear"),
+  cbind(df_exponential, type = "Exponential"),
+  cbind(df_rectangular_hyperbola, type = "Rectangular Hyperbola"),
+  cbind(df_sigmoid, type = "Sigmoid")
+)
+
+# Reorder levels for facet_wrap
+df_all$type <- factor(df_all$type, levels = c("Linear", "Exponential", "Rectangular Hyperbola", "Sigmoid"))
+
+# Plot the data using ggplot2 and facet_wrap
+ggplot(df_all, aes(x = x, y = y)) +
+  geom_line() +
+  facet_wrap(~type, scales = "free_y") +
+  labs(title = "FLinear, Exponential, Rectangular Hyperbola, Sigmoid", x = "X-axis", y = "Y-axis") +
+  theme_minimal()
+```
+
+Function help to predicts, we detect a pattern and model it with. All is about describe and predict.
+
+Linear regression is just a linear function regulated by a simple equation:
+
+$y_i = \beta_{0} + \beta_{1} x_{i1} + \varepsilon_i$
+
+The relationship as you can see is linear, how may ways therea re to fit a line to the data?
+
+```{r }
+# Set seed for reproducibility
+set.seed(123)
+
+# Generate two variables with linear correlation
+x <- rnorm(100)
+y <- 2 * x + rnorm(100)
+
+# Create a data frame
+data <- data.frame(x = x, y = y)
+
+# Plot the generated data and add linear fits
+ggplot(data, aes(x, y)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "red", formula = y ~ x) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue", formula = y ~ poly(x, 2)) +
+  geom_smooth(method = "lm", se = FALSE, color = "green", formula = y ~ poly(x, 3)) +
+  labs(title = "Linearly Correlated Data with Different Linear Fits",
+       x = "X", y = "Y") +
+  theme_minimal()
+
+```
+
+Which to choose? the one that mimimize the residual sum of square. Other metrics is the residual standard error, the lower, the better
+
+```{r the residuals}
+data.lm<- lm(x~y, data=data)
+
+plot(data.lm)
+
+data.lm
+```
+
+# Real example
+
+```{r install packages}
+
+req.package<- c("ape", "car","corrplot", "DHARMa", "dplyr","drc","effects", "emmeans",
+                   "factoextra", "FactoMineR", "geiger", "GerminaR","ggthemes", 
+                   "interactions","knitr","MASS", "multcompView", 
+                   "patchwork", "PerformanceAnalytics", "phytools", 
+                   "picante", "plotrix", "readr", "readxl", 
+                   "sjPlot","sjlabelled", "sjmisc",
+                    "tibble", "tidyverse")
+install.packages(req.package)
+
+#load library
+sapply(req.package, require, character.only = TRUE)
+```
+
+## Data import
+
+```{r data import }
+
+climdat <- as.data.frame(read_xlsx("Desktop/Material TADAB Workshop/Course_material/Regression/Practice/Data.xlsx", 3, col_names = TRUE))
+
+climdat
+
+
+```
+
+```{r data checking}
+
+glimpse(climdat)
+summary(climdat)
+
+# transforming all columns to numeric variables:
+climdat[,2:22] = data.matrix(climdat[,2:22]) # convert the df to matrix
+climdat[,2:22] = as.numeric(unlist(climdat[,2:22])) # the transformation
+
+str (climdat)
+```
+
+## Data visualization
+
+```{r data visualization}
+ggplot (climdat, aes(x=Elevation, y=MAT))+
+  geom_point()+ # scaterplot
+  geom_smooth(method = "lm", colour="blue")+ # add a linear regression line to the plot 
+  geom_smooth(method = "loess", colour = "red") + # add a non-linear regression line to the plot
+  theme_bw() # 'style' your graphs  
+
+# more on ggplot 2 themes: https://ggplot2.tidyverse.org/reference/ggtheme.html
+
+# Visualize more variables 
+pairs (climdat[,2:7]) # all variables are tightly correlated with each other
+
+```
+
+## Correlation plot
+
+```{r correlations}
+# correlations among the factors (could be used as a separate tool)
+cormat <-  cor(climdat[,2:7], 
+             method = c("spearman"), # use Pearson cor. coefficient when you suspect the relationships to be linear 
+             use = "pairwise.complete.obs") 
+
+corrplot.mixed(cormat, sig.level = c(.05), insig = "label_sig")
+
+```
+
+## Histogramm plot
+
+```{r Linear regression}
+
+# First, we will make some small adjustments
+hist (climdat$Elevation)
+
+# the station at 2578 m a.s.l. is a clear outlier and it is better to exclude it from the analysis for now
+
+```
+
+Do not drop what seem to be outliers!
+
+```{r}
+# Below you will see how it might affect the regression
+
+climdat2 = climdat[1:25,]
+```
+
+```{r regression fit}
+
+m1 <-  lm (MAT ~ Elevation, data = climdat2)
+
+summary(m1)
+```
+
+The call remind you the relationships between x a y,the residuals of the fit, the intercept and the column names are slopes, the estimated for the betas, the SE for the fit of both alpha and betas, the t values to test if they differ from zero and the pvalues. We aim to have significant to see if the is a relationship between the data we noi compare the fit.
+
+```{r}
+# Below you will see how reducing the size  might affect the regression
+
+climdat3 = climdat %>% 
+  sample_n(5)
+```
+
+```{r regression fit}
+
+m1 <-  lm (MAT ~ Elevation, data = climdat3)
+
+summary(m1)
+
+```
+
+As you can see the estimate in SE increase a lot. Standard error \> 5% may be unacceptable.
+
+```{r let's visualize the results'}
+plot (MAT ~ Elevation, data = climdat2,
+      xlim = c(0,2200), # specify the length of x-axis
+      ylim = c (0,11)) # specify the length of y-axis
+abline (a =9.967559, b= -0.003779) 
+```
+
+## Assumption of linear regression
+
+1.  Linearity of the predictor, the reation shoudl be linear
+
+2.  the mean of residuals should be close to zero
+
+<!-- -->
+
+3.  Homoschedasticity of residulas or equal variance resuludals. No pattern shoudl be present in the residuals vs fitted and scale location.
+
+4.  normality of the residuals, it means that the line that pass thought the data leave pass though the mean of several normal distributions.![normality in the residulas](Desktop/Material%20TADAB%20Workshop/Course_material/Regression/Practice/Screenshot%202023-11-27%20alle%2011.38.20.png)
+
+5.  No correlation between respond variables and residulas
+
+6.  There shoudl be variability in the data! check var()
+
+7.  numer the observation must be greater than explanatory variables. Rule of Thumb is that 10 observation x variables
+
+8.  Residuals should be not autocorrelated (common in time series)
+
+9.  Multicollinearity, run correlation test
+
+10. Indipendence of the data, data should be indipendet.
+
+### Let's visualize them
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(stats)
+
+# the relation shoudl be linear
+# here a non non linerar relationship betwen data is fitted
+# Set seed for reproducibility
+set.seed(123)
+
+# Simulate 100 points from a sine function
+x <- seq(0, 2 * pi, length.out = 1000)
+y <- sin(x) + rnorm(1000, mean = 0, sd = 0.1)  # Adding some random noise
+
+# Create a data frame
+data <- data.frame(x = x, y = y)
+
+# Fit a linear model to the data
+linear_model <- lm(y ~ x, data = data)
+
+# Create a data frame for the fitted line
+fitted_line <- data.frame(x = x, y = predict(linear_model))
+
+# Plot the data and the fitted line using ggplot2
+ggplot(data, aes(x = x, y = y)) +
+  geom_point() +                        # Scatter plot of the simulated data points
+  geom_line(data = fitted_line,         # Fitted line
+            aes(x = x, y = y, color = "Fitted Line"), size = 1) +
+  ggtitle("Simulated Data and Fitted Line") +
+  xlab("X") +
+  ylab("Y") +
+  theme_minimal()
+
+
+# Simulate normally distributed data
+set.seed(123)
+x <- rnorm(100)
+y <- 2 * x + rnorm(100)
+
+# Fit a linear model
+linear_model <- lm(y ~ x)
+
+# Residuals
+residuals <- residuals(linear_model)
+
+# Mean of residuals close to zero
+mean_residuals <- mean(residuals)
+
+# Homoscedasticity - Residuals vs. Fitted plot
+plot_res_vs_fitted <- ggplot(data.frame(x = fitted(linear_model), residuals = residuals), aes(x = x, y = residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ggtitle("Residuals vs. Fitted") +
+  xlab("Fitted values") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Normality of residuals - QQ plot
+qq_plot <- qqnorm(residuals)
+qq_line <- qqline(residuals, col = "red")
+
+# No correlation between response variable and residuals
+correlation_plot <- ggplot(data.frame(x = y, residuals = residuals), aes(x = x, y = residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ggtitle("Correlation between Response and Residuals") +
+  xlab("Response variable") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Check variability in the data - Var()
+variability_check <- var(y)
+
+# Number of observations greater than explanatory variables
+n_obs <- length(y)
+n_vars <- length(coef(linear_model)) - 1  # Subtracting 1 for the intercept term
+
+# Residuals not autocorrelated
+acf_plot <- acf(residuals)
+
+# Multicollinearity - correlation test
+correlation_matrix <- cor(model.matrix(linear_model))
+
+# Independence of the data
+independence_plot <- ggplot(data.frame(x = 1:n_obs, y = residuals), aes(x = x, y = residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ggtitle("Independence of Data") +
+  xlab("Observations") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Display plots
+print(mean_residuals)
+print(plot_res_vs_fitted)
+print(qq_plot)
+print(correlation_plot)
+print(variability_check)
+print(n_obs > n_vars)
+print(acf_plot)
+print(correlation_matrix)
+print(independence_plot)
+
+
+#on the real data
+
+# linear model assumptions
+par(mfrow=c(2,2))
+plot (m1)
+
+# Assumption 1: Model linearity
+# the residuals should be scattered all over the plot
+# 'shotgun shot' or 'star sky' pattern - ok
+
+# Assumption 2: the mean of residuals is zero (or close to it)
+mean(m1$residuals)
+
+# Assumption 3: Homoscedasticity of residuals or equal variance
+# No clear pattern - ok
+
+# Assumption 4: Normality of residuals
+# Almost all residuals are located along the line - ok
+# There are always some deviations from normality, especially at the line ends
+
+# Assumption 5: Lack of correlation between the explanatory variables and residuals
+cor.test(climdat2$Elevation, m1$residuals) # no correlation - ok
+
+# Assumption 6: Positive variance in explanatory variables
+var (climdat2$Elevation) # variance is greater than 0 - ok
+
+
+# influential points
+# remember the station at 2578 m a.s.l.?
+m2 = lm (MAT ~ Elevation, data = climdat)
+summary (m2)
+```
+
+Degree of freedom are the number of observation, more there are, more robust are your analyses. F statistic
+
+R\^2 the higher the better, the f statistics give the signiciance of the models and asses if on vatiabile as a non zero coefficients. most important in multiple LR.
+
+Let make an exaple with pasta in italy
+
+```{r let's run a dummy exaple with pasta types '}
+# Load necessary libraries
+library(ggplot2)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Generate fake data
+n <- 100  # Number of observations
+
+# Predictor variables
+climate <- rnorm(n, mean = 20, sd = 5)
+source <- sample(c("Spring", "Well", "Tap"), n, replace = TRUE)
+years_of_history <- rnorm(n, mean = 200, sd = 50)
+num_dialects <- rpois(n, lambda = 5)
+
+# Simulate a relationship with some noise
+pasta_types <- 50 + 2 * climate + ifelse(source == "Spring", 5, 0) + 0.1 * years_of_history - 3 * num_dialects + rnorm(n, mean = 0, sd = 10)
+
+# Create a data frame
+data <- data.frame(pasta_types, climate, source, years_of_history, num_dialects)
+
+# Fit four different linear models
+model1 <- lm(pasta_types ~ climate, data = data)
+model2 <- lm(pasta_types ~ climate + source, data = data)
+model3 <- lm(pasta_types ~ climate + years_of_history, data = data)
+model4 <- lm(pasta_types ~ climate + source + years_of_history + num_dialects, data = data)
+
+# Extract R-squared values
+r_squared1 <- summary(model1)$r.squared
+r_squared2 <- summary(model2)$r.squared
+r_squared3 <- summary(model3)$r.squared
+r_squared4 <- summary(model4)$r.squared
+
+# Display R-squared values
+cat("R-squared for climate:", round(r_squared1, 3), "\n")
+cat("R-squared for climate + source:", round(r_squared2, 3), "\n")
+cat("R-squared for climate + years_of_history:", round(r_squared3, 3), "\n")
+cat("R-squared for the full model:", round(r_squared4, 3), "\n")
+
+```
+
+R squared is just a single measurement, it tell how much a variable explain but is part of the story. You should report the pattern.
+
+Checking the influential points! influential points have strong influence on the data. the computer doens't know that and try to inclide influential points and pull down the regression line toward it.
+
+```{r influential points}
+
+# Load necessary libraries
+library(ggplot2)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Generate data with a more influential point
+n <- 10  # Number of observations
+x <- seq(1, n)
+y <- 2 * x + rnorm(n, mean = 0, sd = 5)
+y[9] <- -100  # More influential point
+
+# Create a data frame
+data <- data.frame(x = x, y = y)
+
+ggplot(data, aes(x = x, y = y)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y ~ x, color = "blue", se = FALSE, linetype = "dashed", size = 1) +
+  geom_smooth(data = data[-9,], method = "lm", formula = y ~ x, color = "red", se = FALSE, linetype = "solid", size = 1) +
+  ggtitle("Regression with and without an Influential Point") +
+  xlab("X") +
+  ylab("Y") +
+  theme_minimal()
+
+# Fit a linear model with the influential point and check the leverage
+model_with_influential <- lm(y ~ x, data = )
+
+plot(model_with_influential)
+
+#on the course data 
+
+# influential points
+# remember the station at 2578 m a.s.l.?
+m2 = lm (MAT ~ Elevation, data = climdat)
+summary (m2)
+
+x11 ()
+par(mfrow=c(2,2))
+plot (m2)
+
+# the point 26 is this very station - a clear influential point that influences the model fit
+
+```
+
+Leverage measure how much hte point has an influence on the regression line.
+
+## How to check which model is the best to our data?
+
+```{r }
+
+# we can compare the goodness of fit
+summary (m1)
+summary (m2)
+# compare the adjusted R2 and F - statistic - the second model is better
+
+# Predicting values for elevations with missing observations
+newelev <-  data.frame (Elevation = seq(0,2500,1)) # create a data frame with elevations you need to predict the MATs for 
+
+predict (m1, newdata=newelev) # predict the MATs for new elevations based on the mode
+
+output <-  as.data.frame (predict (m1, newdata=newelev)) # one small adjustment
+
+# export the data (optionally)
+write.csv (output, "MAT_elevation.csv")
+```
+
+R2 in ecology of 60% is a good result. In prediction we have also to take into account the variability in the data, this can be done using confidence interval of the regression.
