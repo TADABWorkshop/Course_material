@@ -1,6 +1,6 @@
 ---
 title: "Regression analysis of biological data in ecology"
-author: "Sergey rosbakh"
+author: "Manuel Tiburtini based on script and lecture of Sergey rosbakh"
 output: html_notebook
 ---
 
